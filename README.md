@@ -74,7 +74,19 @@ On **TrueNAS Scale**, pass your pre-created ZFS dataset path as an argument:
 
 > The script is fully idempotent — re-running it on an existing installation is always safe and will never overwrite existing credentials.
 
-### 3. Configure your API keys
+### 3. Build and start the container
+
+```bash
+docker compose up -d --build
+```
+
+> ⚠️ Once started, remember to **set the password** directly from the Web UI or by modifying the `userdata/configs/secrets.toml` file.
+
+***
+
+## Configuration
+
+### Configure your API keys
 
 API keys can be configured directly from the **PBGui web interface** at `http://localhost:8501` — no manual file editing required.
 
@@ -90,23 +102,15 @@ Alternatively, you can edit `userdata/api-keys.json` directly:
 }
 ```
 
-### 4. (Optional) Enable password protection
+### Enable password protection
 
-> ⚠️ If you're going to expose PBGui-Docker to the Internet, make sure to set the password before the first start by modifying the userdata/configs/secrets.toml file. Even if you're going to use it on your local network, it's always good to have a first layer of protection against any threat.
-
-By default, PBGui starts without authentication — suitable for private, self-hosted deployments. The login password can be set directly from the **pbgui web interface** at `http://localhost:8501`.
+By default, PBGui starts without authentication — suitable for private, self-hosted deployments. The login password can be set directly from the **PBGui web interface** at `http://localhost:8501`.
 
 Alternatively, you can enable it manually by editing `userdata/configs/secrets.toml` and uncommenting:
 
 ```toml
 [passwords]
 pbgui = "your-strong-password"
-```
-
-### 5. Build and start the container
-
-```bash
-docker compose up -d --build
 ```
 
 ***

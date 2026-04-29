@@ -195,7 +195,7 @@ docker start pbgui
 
 Contributions, bug reports, and suggestions are welcome!
 
-- **Bug reports / feature requests** → open an [Issue](https://github.com/dreamelite96/pbgui-docker/issues)
+Feel free to open an [Issue](https://github.com/dreamelite96/pbgui-docker/issues) if you have any questions.
 
 ***
 

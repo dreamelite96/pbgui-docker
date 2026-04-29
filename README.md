@@ -168,7 +168,9 @@ docker compose up -d --build --no-cache
 
 ***
 
-## Stopping the Container
+## Managing
+
+### Stopping the Container
 
 To stop and remove the PBGui-Docker container without losing its data you can run:
 ```bash
@@ -180,12 +182,20 @@ To simply pause the container without removing it you can run:
 docker stop pbgui
 ```
 
-## Starting the Container
+### Starting the Container
 
 To restart the paused container you can run:
 ```bash
 docker start pbgui
 ```
+
+***
+
+## Contributing
+
+Contributions, bug reports, and suggestions are welcome!
+
+- **Bug reports / feature requests** → open an [Issue](https://github.com/dreamelite96/pbgui-docker/issues)
 
 ***
 

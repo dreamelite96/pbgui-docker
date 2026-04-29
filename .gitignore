@@ -1,0 +1,45 @@
+# ---------------------------------------------------
+# 1. Project data and sensitive credentials
+# ---------------------------------------------------
+.userdata/
+api-keys.json
+secrets.toml
+config/secrets.toml
+.env
+
+# ---------------------------------------------------
+# 2. Python-generated files
+# ---------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+venv/
+venv_pb7/
+venv_pbgui/
+env/
+.venv/
+.Python
+
+# ---------------------------------------------------
+# 3. Cache, logs, and generated data
+# ---------------------------------------------------
+*.log
+logs/
+pb7_caches/
+historical_data/
+pb7_backtests/
+pb7_optimize_results/
+pb7_optimize_results_analysis/
+
+# ---------------------------------------------------
+# 4. OS and editor files
+# ---------------------------------------------------
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace

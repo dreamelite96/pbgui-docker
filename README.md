@@ -26,7 +26,7 @@ The image is built on **Ubuntu 24.04 LTS** and bundles the full dependency stack
 - 🔄 **Idempotent setup script** — safely re-runnable; never overwrites existing credentials
 - 💾 **Persistent volumes** — all data, configs, backtests, and API keys survive container restarts
 - 🩺 **Healthcheck built-in** — Docker automatically monitors the Streamlit interface
-- 🖥️ **TrueNAS Scale compatible** — `setup.sh` detects TrueNAS environments and adapts accordingly
+- 🖥️ **TrueNAS Scale compatible** — `install.sh` detects TrueNAS environments and adapts accordingly
 
 
 ## Requirements
@@ -42,7 +42,7 @@ The image is built on **Ubuntu 24.04 LTS** and bundles the full dependency stack
 pbgui-docker/
 ├── Dockerfile              # Container image definition (Ubuntu 24.04 LTS + Python 3.12 + Rust)
 ├── docker-compose.yml      # Service orchestration with volumes, ports, and security config
-├── setup.sh                # Userdata directory bootstrap script
+├── install.sh              # Installation script
 └── README.md               # This file
 ```
 
@@ -50,37 +50,11 @@ pbgui-docker/
 
 ## Installation
 
-### 1. Clone this repository
+### One-Command Install
 
 ```bash
-git clone https://github.com/dreamelite96/pbgui-docker.git
-cd pbgui-docker
+curl -fsSL https://raw.githubusercontent.com/dreamelite96/pbgui-docker/main/install.sh -o /tmp/install.sh && sudo bash /tmp/install.sh && sudo rm /tmp/install.sh
 ```
-
-### 2. Run the setup script
-
-The script creates the `userdata/` directory structure and generates template config files.
-
-```bash
-chmod +x setup.sh
-./setup.sh
-```
-
-On **TrueNAS Scale**, pass your pre-created ZFS dataset path as an argument:
-
-```bash
-./setup.sh /mnt/tank/pbgui/userdata
-```
-
-> The script is fully idempotent — re-running it on an existing installation is always safe and will never overwrite existing credentials.
-
-### 3. Build and start the container
-
-```bash
-docker compose up -d --build
-```
-
-> ⚠️ Once started, remember to **set the password** directly from the Web UI or by modifying the `userdata/configs/secrets.toml` file.
 
 ***
 
@@ -104,13 +78,12 @@ Alternatively, you can edit `userdata/api-keys.json` directly:
 
 ### Enable password protection
 
-By default, PBGui starts without authentication — suitable for private, self-hosted deployments. The login password can be set directly from the **PBGui web interface** at `http://localhost:8501`.
+The PBGui-Docker installer will ask you to set a password for the Web UI directly, but you can also set it from the **PBGui web interface** at `http://localhost:8501`.
 
-Alternatively, you can enable it manually by editing `userdata/configs/secrets.toml` and uncommenting:
+Alternatively, you can enable it manually by editing `userdata/configs/secrets.toml` and adding:
 
 ```toml
-[passwords]
-pbgui = "your-strong-password"
+password = "your-strong-password"
 ```
 
 ***

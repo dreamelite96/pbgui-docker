@@ -4,6 +4,25 @@
 [![Ubuntu](https://img.shields.io/badge/Ubuntu-24.04_LTS-E95420?style=for-the-badge&logo=ubuntu&logoColor=white)](https://ubuntu.com/)
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
 
+<a href="https://www.buymeacoffee.com/dreamelite96" target="_blank">
+  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" width="200" height="50">
+</a>
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Features](#features)
+- [Requirements](#requirements)
+- [Project Structure](#project-structure)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Accessing the Interface](#accessing-the-interface)
+- [Volumes & Persistent Data](#volumes--persistent-data)
+- [Resource Limits](#resource-limits)
+- [Updating](#updating)
+- [Managing](#managing)
+- [Contributing](#contributing)
+
 ## Overview
 
 **PBGui-Docker** provides a ready-to-use Docker setup to deploy [PBGui](https://github.com/msei99/pbgui) by msei99 — a Streamlit-based web GUI for managing [Passivbot v7](https://github.com/enarjord/passivbot) trading bot instances — inside an isolated Docker container.
@@ -15,18 +34,16 @@ The image is built on **Ubuntu 24.04 LTS** and bundles the full dependency stack
 - **Ansible** (used internally by PBGui for remote bot management)
 - Two isolated Python virtual environments: one for PBGui (`venv_pbgui`) and one for Passivbot v7 (`venv_pb7`)
 
-> **Note:** This is an independent, community-made project. It is not affiliated with or endorsed by the original PBGui author.
-
 
 ## Features
 
-- 🐳 **Cross-platform** — works on Linux, macOS, and Windows via Docker
 - ⚡ **One-command setup** — no manual Python, Rust, or Ansible installation required
-- 🔒 **Security-hardened** — runs with dropped Linux capabilities and `no-new-privileges`
-- 🔄 **Idempotent setup script** — safely re-runnable; never overwrites existing credentials
+- 🐳 **Cross-platform** — works on Linux, macOS, and Windows via Docker
 - 💾 **Persistent volumes** — all data, configs, backtests, and API keys survive container restarts
+- 🔄 **Re-runnable setup script** — can be safely run multiple times; never overwrites existing credentials
+- 🔒 **Security-hardened** — runs with dropped Linux capabilities and `no-new-privileges`
 - 🩺 **Healthcheck built-in** — Docker automatically monitors the Streamlit interface
-- 🖥️ **TrueNAS Scale compatible** — `install.sh` detects TrueNAS environments and adapts accordingly
+- 🖥️ **TrueNAS SCALE compatible** — `install.sh` detects TrueNAS environments and adapts accordingly
 
 
 ## Requirements
@@ -43,12 +60,36 @@ pbgui-docker/
 ├── Dockerfile              # Container image definition (Ubuntu 24.04 LTS + Python 3.12 + Rust)
 ├── docker-compose.yml      # Service orchestration with volumes, ports, and security config
 ├── install.sh              # Installation script
-└── README.md               # This file
+├── README.md               # This file
+└── userdata/               # Created by the installer — all persistent data lives here
+    ├── api-keys.json       # Exchange API credentials
+    ├── configs/            # secrets.toml and other app-level config
+    ├── pbgui_data/         # PBGui runtime state, bot list, UI settings
+    ├── historical_data/    # Downloaded OHLCV market data
+    └── pb7/                # Passivbot v7 configs, backtests, and optimisation results
 ```
 
 ***
 
 ## Installation
+
+`install.sh` handles the entire setup: checks prerequisites, clones the repository, creates the directory structure, guides you through initial configuration, builds and starts the Docker container, and verifies that the service is healthy.
+
+### System Requirements
+
+|  | Minimum | Recommended |
+|---|---|---|
+| CPU | 2 cores | 4+ cores |
+| RAM | 4GB | 8GB+ |
+| Disk | 20GB free | 50GB+ free |
+| OS | Any Linux with Docker | Ubuntu Server 26.04 LTS / TrueNAS |
+
+> **Note:** The first build compiles a Rust extension (`passivbot-rust`) and may take **5-10 minutes** depending on your hardware. Subsequent builds are much faster thanks to Docker layer caching.
+
+**Required software:**
+- [Docker](https://docs.docker.com/get-docker/) v20.10+
+- [Docker Compose](https://docs.docker.com/compose/install/) v2.0+ (plugin, not standalone)
+- [Git](https://git-scm.com/install/)
 
 ### One-Command Install
 
@@ -56,13 +97,41 @@ pbgui-docker/
 curl -fsSL https://raw.githubusercontent.com/dreamelite96/pbgui-docker/main/install.sh -o /tmp/install.sh && sudo bash /tmp/install.sh && sudo rm /tmp/install.sh
 ```
 
+The script can also be run locally from an already-cloned repository:
+
+```bash
+sudo ./install.sh
+```
+
+### What the Installer Asks
+
+The installer walks you through a short interactive setup. All prompts have a default value — press Enter to accept it.
+
+1. **Install directory** — base path where `pbgui-docker/` will be created
+   - Default on Linux: `/opt/docker`
+   - Default on TrueNAS Scale: `/mnt/tank/docker`
+   - On TrueNAS, the installer can automatically create a ZFS dataset at the chosen path
+
+2. **Default exchange** — pre-populates `api-keys.json` with the exchange name *(default: `binance`)*; supported values include `bybit`, `bitget`, `gateio`, `hyperliquid`, `okx`, `kucoin`, `bingx`. Real API credentials are added later from the Web UI.
+
+3. **Password protection** — optionally set a login password for the Web UI. Can be enabled or changed at any time from the Web UI or by editing `userdata/configs/secrets.toml`.
+
+### First-Time Setup
+
+Once the installer reports **PBGui is up and running**:
+
+1. Open the Web UI at **http://\<your-host-ip\>:8501**
+2. Add your exchange **Wallet Address** and **Private Key** under **System → API-Keys**
+3. Add your **CoinMarketCap API key** under **System → API-Keys**
+4. You're ready — create your first bot instance under **PBv7 → Run**
+
 ***
 
 ## Configuration
 
 ### Configure your API keys
 
-API keys can be configured directly from the **PBGui web interface** at `http://localhost:8501` — no manual file editing required.
+API keys can be configured directly from the **PBGui web interface** at `http://<your-host-ip>:8501` — no manual file editing required.
 
 Alternatively, you can edit `userdata/api-keys.json` directly:
 
@@ -78,7 +147,7 @@ Alternatively, you can edit `userdata/api-keys.json` directly:
 
 ### Enable password protection
 
-The PBGui-Docker installer will ask you to set a password for the Web UI directly, but you can also set it from the **PBGui web interface** at `http://localhost:8501`.
+The PBGui-Docker installer will ask you to set a password for the Web UI directly, but you can also set it from the **PBGui web interface** at `http://<your-host-ip>:8501`.
 
 Alternatively, you can enable it manually by editing `userdata/configs/secrets.toml` and adding:
 
@@ -92,8 +161,8 @@ password = "your-strong-password"
 
 | Interface | URL |
 |---|---|
-| WebUI (Streamlit) | http://localhost:8501 |
-| New WebUI (FastAPI) | http://localhost:8000 |
+| WebUI (Streamlit) | http://\<your-host-ip\>:8501 |
+| New WebUI (FastAPI) | http://\<your-host-ip\>:8000 |
 
 ***
 
@@ -128,15 +197,16 @@ The container is configured with the following default resource limits (adjustab
 
 ## Updating
 
-PBGui and Passivbot v7 can be updated directly from the **PBGui web interface** at `http://localhost:8501` — no terminal access required.
+### Update PBGui / Passivbot v7
+PBGui and Passivbot v7 can be updated directly from the **PBGui web interface** at `http://<your-host-ip>:8501` — no terminal access required.
 
-If you need to rebuild the Docker image itself (e.g. after changes to the `Dockerfile`):
-
+### Rebuild the Docker image
+If you made changes to the `Dockerfile` or need a fresh image build:
 ```bash
 docker compose down
-docker compose up -d --build --no-cache
+docker compose build --no-cache
+docker compose up -d
 ```
-
 > Your `userdata/` directory is never affected by image rebuilds.
 
 ***
@@ -168,7 +238,13 @@ docker start pbgui
 
 Contributions, bug reports, and suggestions are welcome!
 
-Feel free to open an [Issue](https://github.com/dreamelite96/pbgui-docker/issues) if you have any questions.
+Feel free to open an [Issue](https://github.com/dreamelite96/pbgui-docker/issues) if you find a bug or have any questions, or submit a [Pull Request](https://github.com/dreamelite96/pbgui-docker/pulls) if you'd like to contribute code or improvements.
+
+If you find this project useful and want to support its development, consider buying me a coffee — it helps keep the project alive and motivates future updates!
+
+<a href="https://www.buymeacoffee.com/dreamelite96" target="_blank">
+  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" width="200" height="50">
+</a>
 
 ***
 

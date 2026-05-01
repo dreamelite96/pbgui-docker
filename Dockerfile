@@ -1,5 +1,4 @@
 # ──────────────────────────────────────────────────────────────────────────────
-
 # Copyright (C) 2026 @dreamelite96
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
@@ -10,7 +9,6 @@
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
-
 # ──────────────────────────────────────────────────────────────────────────────
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -73,8 +71,8 @@ RUN rm -f /usr/lib/python3.12/EXTERNALLY-MANAGED
 # - pbgui : Streamlit-based web UI for managing Passivbot instances
 # - pb7   : Passivbot v7 trading bot engine (Rust-accelerated)
 # ──────────────────────────────────────────────────────────────────────────────
-RUN git clone https://github.com/msei99/pbgui.git \
-    && git clone https://github.com/enarjord/passivbot.git pb7
+RUN git clone --depth 1 https://github.com/msei99/pbgui.git \
+    && git clone --depth 1 https://github.com/enarjord/passivbot.git pb7
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Global PBGui dependencies
@@ -82,7 +80,7 @@ RUN git clone https://github.com/msei99/pbgui.git \
 # can import PBGui modules without requiring manual venv activation.
 # --ignore-installed avoids version conflicts with Ansible's own packages.
 # ──────────────────────────────────────────────────────────────────────────────
-RUN python3.12 -m pip install --ignore-installed -r /app/pbgui/requirements.txt
+RUN python3.12 -m pip install --ignore-installed --no-cache-dir -r /app/pbgui/requirements.txt
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Isolated virtual environments

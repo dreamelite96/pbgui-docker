@@ -3,6 +3,7 @@
 # ──────────────────────────────────────────────────────────────────────────────
 # Copyright (C) 2026 @dreamelite96
 # SPDX-License-Identifier: GPL-3.0-or-later
+#
 # This file is part of "pbgui-docker".
 # https://github.com/dreamelite96/pbgui-docker
 #
@@ -25,6 +26,22 @@
 #   --non-interactive    Skip all prompts; use defaults (for CI / scripting)
 
 set -euo pipefail
+
+# ─── Cleanup trap ─────────────────────────────────────────────────────────────
+# Fires on any unhandled error (ERR) or explicit exit (EXIT with non-zero code).
+# Reminds the user to inspect the state manually; does not attempt auto-rollback
+# because partially-created resources (ZFS datasets, .env files, …) are safer
+# left in place for the operator to review than silently removed.
+_trap_cleanup() {
+    local code=$?
+    [ $code -eq 0 ] && return
+    echo ""
+    warn "Installation interrupted (exit code ${code})."
+    warn "Review the output above, fix the issue, and re-run the script."
+    warn "Partially created files or directories are left intact for inspection."
+    echo ""
+}
+trap _trap_cleanup EXIT
 
 # ─── Root / sudo check ────────────────────────────────────────────────────────
 if [ "$(id -u)" -ne 0 ]; then
@@ -52,7 +69,7 @@ warn()    { echo -e "  ${YELLOW}!${RESET} $*"; }
 error()   { echo -e "  ${RED}✗${RESET} $*" >&2; exit 1; }
 
 # Single divider style used everywhere
-divider() { echo -e "${DIM}  ──────────────────────────────────────────────────────${RESET}"; }
+divider()      { echo -e "${DIM}  ──────────────────────────────────────────────────────${RESET}"; }
 mini_divider() { echo -e "${DIM}  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─${RESET}"; }
 
 # Interactive yes/no prompt
@@ -101,8 +118,10 @@ nextstep() {
 # ─── Project constants ────────────────────────────────────────────────────────
 REPO_URL="https://github.com/dreamelite96/pbgui-docker.git"
 REPO_DIRNAME="pbgui-docker"
+# Default port values — overridden later by .env if present.
 WEBUI_PORT="8501"
 API_PORT="8000"
+CONTAINER="pbgui"
 
 # ─── Script origin detection ──────────────────────────────────────────────────
 _src="${BASH_SOURCE[0]:-}"
@@ -153,20 +172,11 @@ detect_host_ip() {
     echo "${ip:-127.0.0.1}"
 }
 
-# ─── Input sanitisation helpers ──────────────────────────────────────────────
+# ─── Input sanitisation ───────────────────────────────────────────────────────
 
 # Escapes backslashes and double-quotes so the value is safe inside a
-# double-quoted JSON string literal produced via heredoc.
-sanitize_json_string() {
-    local val="$1"
-    val="${val//\\/\\\\}"   # \ → \\
-    val="${val//\"/\\\"}"   # " → \"
-    echo "$val"
-}
-
-# Escapes backslashes and double-quotes so the value is safe inside a
-# double-quoted TOML string literal produced via heredoc.
-sanitize_toml_string() {
+# double-quoted string literal (JSON, TOML, or any similar format).
+sanitize_string() {
     local val="$1"
     val="${val//\\/\\\\}"   # \ → \\
     val="${val//\"/\\\"}"   # " → \"
@@ -228,6 +238,10 @@ command -v git    &>/dev/null || MISSING+=("git")
 
 if ! docker compose version &>/dev/null 2>&1; then
     error "'docker compose' (v2 plugin) not found.  Install Docker Compose v2+ and retry."
+fi
+
+if ! docker info &>/dev/null 2>&1; then
+    error "Docker daemon is not running or not reachable.  Start Docker and re-run."
 fi
 
 success "docker           $(docker --version  | grep -oP '\d+\.\d+\.\d+' | head -1)"
@@ -346,7 +360,6 @@ elif [ "$ENV_TYPE" = "TrueNAS" ]; then
                             success "Dataset created (midclt)   ${_current}"
                         else
                             warn "midclt failed for ${_current} — falling back to zfs create"
-                            # FIX #1: guard against zfs not being in PATH
                             command -v zfs &>/dev/null || error "'zfs' not found in PATH — cannot create dataset ${_current}."
                             zfs create -p "$_current"
                             success "Dataset created (zfs)      ${_current}"
@@ -354,7 +367,6 @@ elif [ "$ENV_TYPE" = "TrueNAS" ]; then
                     fi
                 done
             else
-                # FIX #1: guard against zfs not being in PATH
                 command -v zfs &>/dev/null || error "'zfs' not found in PATH — install the ZFS utilities and re-run."
                 zfs create -p "$ZFS_DATASET"
                 success "Dataset created (zfs)    ${ZFS_DATASET}"
@@ -416,6 +428,18 @@ else
     success "Repository cloned."
 fi
 
+# ─── Load .env overrides ──────────────────────────────────────────────────────
+# If a .env file exists in the repository root, source it so that display
+# values (ports, container name) shown in the summary match docker-compose.
+ENV_FILE="${REPO_DIR}/.env"
+if [ -f "$ENV_FILE" ]; then
+    # shellcheck disable=SC1090
+    set -a; source "$ENV_FILE"; set +a
+    WEBUI_PORT="${PBGUI_WEBUI_PORT:-$WEBUI_PORT}"
+    API_PORT="${PBGUI_API_PORT:-$API_PORT}"
+    CONTAINER="${PBGUI_CONTAINER_NAME:-$CONTAINER}"
+fi
+
 # ══════════════════════════════════════════════════════════════════════════════
 # STEP 6 — Files & Configuration
 # ══════════════════════════════════════════════════════════════════════════════
@@ -459,6 +483,22 @@ echo ""
 chmod -R 755 "$USERDATA_PATH"
 success "Permissions applied  ${DIM}755 (recursive)${RESET}"
 
+# ── .env ──────────────────────────────────────────────────────────────────────
+
+echo ""
+mini_divider
+echo ""
+echo -e "  ${BOLD}Environment file (.env)${RESET}"
+echo ""
+
+if [ -f "$ENV_FILE" ]; then
+    info ".env already present — skipping  ${DIM}(customisations preserved)${RESET}"
+else
+    cp "${REPO_DIR}/.env.example" "$ENV_FILE"
+    success ".env created from .env.example"
+    info "Edit ${CYAN}${ENV_FILE}${RESET} to customise ports, resource limits, and image name."
+fi
+
 # ── api-keys.json ─────────────────────────────────────────────────────────────
 
 API_KEYS_FILE="${USERDATA_PATH}/api-keys.json"
@@ -481,7 +521,7 @@ else
         prompt_input EXCHANGE_NAME "Default exchange" " [binance]"
     fi
 
-    EXCHANGE_NAME_SAFE="$(sanitize_json_string "$EXCHANGE_NAME")"
+    EXCHANGE_NAME_SAFE="$(sanitize_string "$EXCHANGE_NAME")"
 
     cat > "$API_KEYS_FILE" <<EOF
 {
@@ -524,7 +564,7 @@ else
     fi
 
     if $ENABLE_AUTH && [ -n "$AUTH_PASSWORD" ]; then
-        AUTH_PASSWORD_SAFE="$(sanitize_toml_string "$AUTH_PASSWORD")"
+        AUTH_PASSWORD_SAFE="$(sanitize_string "$AUTH_PASSWORD")"
         cat > "$SECRETS_FILE" <<EOF
 # PBGui — Streamlit secrets
 # Authentication: ENABLED
@@ -583,24 +623,42 @@ nextstep "Build & Launch"
 
 cd "$REPO_DIR"
 
+USE_CACHE=true
+
 if ! $NON_INTERACTIVE; then
-    warn "First-time build note"
+    warn "Build note"
     echo ""
     info "The Docker image must compile a Rust extension (passivbot-rust)."
-    info "This can take ${BOLD}5–10 minutes${RESET}, depending on your system."
-    info "Subsequent builds are much faster thanks to Docker layer caching."
+    info "This can take ${BOLD}5-10 minutes${RESET}, depending on your system."
     echo ""
+
+    if confirm "Use Docker layer cache for the build?" "y"; then
+        USE_CACHE=true
+        info "Cache ${GREEN}enabled${RESET}  ${DIM}— unchanged layers will be reused (faster)${RESET}"
+    else
+        USE_CACHE=false
+        info "Cache ${YELLOW}disabled${RESET}  ${DIM}— all layers will be rebuilt from scratch${RESET}"
+    fi
+
+    echo ""
+
     if ! confirm "Build and start the container now?" "y"; then
         success "Setup complete."
         echo ""
         info "When you're ready, run:"
-        echo -e "    ${CYAN}cd ${REPO_DIR} && sudo docker compose up -d --build${RESET}"
+        echo -e "    ${CYAN}cd ${REPO_DIR} && docker compose build --no-cache && docker compose up -d${RESET}"
         echo ""
         exit 0
     fi
 fi
 
-docker compose up -d --build
+if $USE_CACHE; then
+    docker compose build
+else
+    docker compose build --no-cache
+fi
+
+docker compose up -d
 
 # ══════════════════════════════════════════════════════════════════════════════
 # STEP 8 — Wait for Healthy
@@ -608,7 +666,6 @@ docker compose up -d --build
 
 nextstep "Verifying Health"
 
-CONTAINER="pbgui"
 TIMEOUT=180
 INTERVAL=5
 ELAPSED=0
@@ -681,7 +738,7 @@ divider
 echo ""
 echo -e "  ${BOLD}Useful commands${RESET}"
 echo ""
-echo -e "    ${DIM}View logs   ${RESET}${CYAN}docker logs -f pbgui${RESET}"
+echo -e "    ${DIM}View logs   ${RESET}${CYAN}docker logs -f ${CONTAINER}${RESET}"
 echo -e "    ${DIM}Stop        ${RESET}${CYAN}docker compose down${RESET}"
 echo -e "    ${DIM}Restart     ${RESET}${CYAN}docker compose restart${RESET}"
 echo -e "    ${DIM}Rebuild     ${RESET}${CYAN}docker compose up -d --build --no-cache${RESET}"
@@ -694,5 +751,5 @@ echo -e "  Consider supporting the project with a small"
 echo -e "  donation to help keep it alive and improving:"
 echo -e "  ${BOLD}${CYAN}https://buymeacoffee.com/dreamelite96${RESET}"
 echo ""
-echo -e "  ${BOLD}${GREEN}We appreciate your support!${RESET}"
+echo -e "  ${BOLD}${GREEN}Thanks for your support!${RESET}"
 echo ""

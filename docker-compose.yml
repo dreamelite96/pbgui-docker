@@ -17,7 +17,13 @@ services:
   # PBGui
   pbgui:
     build: .
-    container_name: pbgui
+
+    # Local image tag — useful for inspecting history and rolling back to a
+    # previously built image without rebuilding from scratch.
+    # The image is never pushed to a registry; it is build-only.
+    image: ${PBGUI_IMAGE_NAME:-pbgui-docker}:${PBGUI_IMAGE_TAG:-latest}
+
+    container_name: ${PBGUI_CONTAINER_NAME:-pbgui}
 
     # ── Security ────────────────────────────────────────────────────────────
     cap_drop:
@@ -28,7 +34,6 @@ services:
       - SETGID
       - DAC_OVERRIDE
       - FOWNER
-      - KILL
     security_opt:
       - no-new-privileges:true
     privileged: false
@@ -40,21 +45,18 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '4'
-          memory: 8192M
+          cpus: '${PBGUI_CPU_LIMIT:-4}'
+          memory: ${PBGUI_MEMORY_LIMIT:-8192M}
 
     # ── Ports ───────────────────────────────────────────────────────────────
+    # Host-side values are read from .env; internal container ports are fixed.
     ports:
-      - mode: ingress
-        protocol: tcp
-        published: 8501
-        target: 8501
-      - mode: ingress
-        protocol: tcp
-        published: 8000
-        target: 8000
+      - "${PBGUI_WEBUI_PORT:-8501}:8501"
+      - "${PBGUI_API_PORT:-8000}:8000"
     
     # ── Healthcheck ─────────────────────────────────────────────────────────
+    # Always targets the fixed internal port (8501), regardless of the host
+    # port configured above.
     healthcheck:
       test:
         - CMD

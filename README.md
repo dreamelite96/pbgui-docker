@@ -41,15 +41,15 @@ The image is built on **Ubuntu 24.04 LTS** and bundles the full dependency stack
 - 🐳 **Cross-platform** — works on Linux, macOS, and Windows via Docker
 - 💾 **Persistent volumes** — all data, configs, backtests, and API keys survive container restarts
 - 🔄 **Re-runnable setup script** — can be safely run multiple times; never overwrites existing credentials
-- 🔒 **Security-hardened** — runs with dropped Linux capabilities and `no-new-privileges`
+- 🔒 **Security-hardened** — runs with dropped Linux capabilities and `no-new-privileges`; the container process runs as a non-root user whose UID/GID matches the host user that owns the bind-mounted volumes
 - 🩺 **Healthcheck built-in** — Docker automatically monitors the Streamlit interface
 - 🖥️ **TrueNAS SCALE compatible** — `install.sh` detects TrueNAS environments and adapts accordingly
 
 
 ## Requirements
 
-- [Docker](https://docs.docker.com/get-docker/) v20.10+
-- [Docker Compose](https://docs.docker.com/compose/install/) v2.0+
+- [Docker](https://docs.docker.com/get-docker/) v25+
+- [Docker Compose](https://docs.docker.com/compose/install/) v2.20+
 - A valid exchange API key (Bybit, Bitget, OKX, Binance and many others) for Passivbot v7
 
 
@@ -107,14 +107,21 @@ sudo ./install.sh
 
 The installer walks you through a short interactive setup. All prompts have a default value — press Enter to accept it.
 
-1. **Install directory** — base path where `pbgui-docker/` will be created
+1. **Host Docker user** — the OS account that will own the repository files and run Docker commands (`docker compose up`, `docker logs`, …)
+   - **Create a new `pbgui` user** *(recommended)* — a dedicated account is created; its UID and GID are used both to own the files on the host and to run the process inside the container, so bind-mounted volumes are always accessible from both sides without permission errors
+   - **Use an existing user** — the installer checks that the account exists and belongs to the `docker` group (or offers to add it)
+   - **Continue as root** — no host user is created; the container process still runs as a non-root user with UID/GID 1000
+
+   > **Note:** Membership in the `docker` group grants root-level access to the host, as it allows mounting arbitrary paths and running privileged containers. Only assign it to accounts you fully control and trust. On TrueNAS, create the user from the TrueNAS UI first and then select the "existing user" option.
+
+2. **Install directory** — base path where `pbgui-docker/` will be created
    - Default on Linux: `/opt/docker`
    - Default on TrueNAS Scale: `/mnt/tank/docker`
    - On TrueNAS, the installer can automatically create a ZFS dataset at the chosen path
 
-2. **Default exchange** — pre-populates `api-keys.json` with the exchange name *(default: `binance`)*; supported values include `bybit`, `bitget`, `gateio`, `hyperliquid`, `okx`, `kucoin`, `bingx`. Real API credentials are added later from the Web UI.
+3. **Default exchange** — pre-populates `api-keys.json` with the exchange name *(default: `binance`)*; supported values include `bybit`, `bitget`, `gateio`, `hyperliquid`, `okx`, `kucoin`, `bingx`. Real API credentials are added later from the Web UI.
 
-3. **Password protection** — optionally set a login password for the Web UI. Can be enabled or changed at any time from the Web UI or by editing `userdata/configs/secrets.toml`.
+4. **Password protection** — optionally set a login password for the Web UI. Can be enabled or changed at any time from the Web UI or by editing `userdata/configs/secrets.toml`.
 
 ### First-Time Setup
 

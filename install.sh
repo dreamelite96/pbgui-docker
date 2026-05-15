@@ -84,6 +84,15 @@ confirm() {
     [[ "$reply" =~ ^[yY]$ ]]
 }
 
+mini_confirm() {
+    local msg="$1" default="${2:-n}" hint
+    [[ "$default" == "y" ]] && hint="Y/n" || hint="y/N"
+    echo -en "  ${CYAN}?${RESET} ${msg} [${hint}]: "
+    read -rp "" reply
+    reply="${reply:-$default}"
+    [[ "$reply" =~ ^[yY]$ ]]
+}
+
 # Generic labelled prompt — prints label + dim hint, reads into named var
 # Usage: prompt_input VARNAME "Label" "default value" [secret]
 prompt_input() {
@@ -106,7 +115,7 @@ pause() {
 
 # Step banner — auto-increments STEP counter
 STEP=0
-TOTAL_STEPS=8
+TOTAL_STEPS=9
 nextstep() {
     STEP=$((STEP + 1))
     echo ""
@@ -115,13 +124,34 @@ nextstep() {
     divider
 }
 
+# Sets or replaces a KEY=VALUE entry in the .env file.
+env_set() {
+    local key="$1" val="$2"
+    if grep -qE "^${key}=" "$ENV_FILE" 2>/dev/null; then
+        sed -i "s|^${key}=.*|${key}=${val}|" "$ENV_FILE"
+    else
+        echo "${key}=${val}" >> "$ENV_FILE"
+    fi
+}
+
 # ─── Project constants ────────────────────────────────────────────────────────
 REPO_URL="https://github.com/dreamelite96/pbgui-docker.git"
 REPO_DIRNAME="pbgui-docker"
+
 # Default port values — overridden later by .env if present.
 WEBUI_PORT="8501"
 API_PORT="8000"
 CONTAINER="pbgui"
+
+# Host user that will own and manage the Docker setup after installation.
+# UID/GID are read after user creation/selection and written to .env so that
+# docker compose can pass them to the Dockerfile and set the container process
+# user, keeping host ownership and container runtime in sync.
+DOCKER_USER="root"
+DOCKER_UID=1000
+DOCKER_GID=1000
+DOCKER_USER_CREATED=false
+DOCKER_GROUP_ADDED=false
 
 # ─── Script origin detection ──────────────────────────────────────────────────
 _src="${BASH_SOURCE[0]:-}"
@@ -208,13 +238,14 @@ divider
 echo ""
 echo -e "  ${BOLD}This script will:${RESET}"
 echo -e "  ${DIM}1.${RESET}  Check prerequisites    ${DIM}docker · docker compose · git${RESET}"
-echo -e "  ${DIM}2.${RESET}  Detect environment     ${DIM}TrueNAS or Linux${RESET}"
-echo -e "  ${DIM}3.${RESET}  Choose install path    ${DIM}base dir → ${REPO_DIRNAME}/ created inside${RESET}"
-echo -e "  ${DIM}4.${RESET}  Provision storage      ${DIM}ZFS dataset on TrueNAS · plain dir on Linux${RESET}"
-echo -e "  ${DIM}5.${RESET}  Clone repository       ${DIM}from GitHub${RESET}"
-echo -e "  ${DIM}6.${RESET}  Write configuration    ${DIM}userdata dirs · api-keys.json · secrets.toml${RESET}"
-echo -e "  ${DIM}7.${RESET}  Build & launch         ${DIM}docker compose up -d --build${RESET}"
-echo -e "  ${DIM}8.${RESET}  Verify health          ${DIM}polls the built-in healthcheck${RESET}"
+echo -e "  ${DIM}2.${RESET}  Set up host user       ${DIM}dedicated user · existing · root${RESET}"
+echo -e "  ${DIM}3.${RESET}  Detect environment     ${DIM}TrueNAS or Linux${RESET}"
+echo -e "  ${DIM}4.${RESET}  Choose install path    ${DIM}base dir → ${REPO_DIRNAME}/ created inside${RESET}"
+echo -e "  ${DIM}5.${RESET}  Provision storage      ${DIM}ZFS dataset on TrueNAS · plain dir on Linux${RESET}"
+echo -e "  ${DIM}6.${RESET}  Clone repository       ${DIM}from GitHub${RESET}"
+echo -e "  ${DIM}7.${RESET}  Write configuration    ${DIM}userdata dirs · api-keys.json · secrets.toml${RESET}"
+echo -e "  ${DIM}8.${RESET}  Build & launch         ${DIM}docker compose up -d --build${RESET}"
+echo -e "  ${DIM}9.${RESET}  Verify health          ${DIM}polls the built-in healthcheck${RESET}"
 echo ""
 
 if ! $NON_INTERACTIVE; then
@@ -249,7 +280,119 @@ success "docker compose   $(docker compose version | grep -oP '\d+\.\d+\.\d+' | 
 success "git              $(git --version | awk '{print $3}')"
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STEP 2 — Environment Detection
+# STEP 2 — Host User Setup
+# ══════════════════════════════════════════════════════════════════════════════
+
+nextstep "Host User Setup"
+
+if ! $NON_INTERACTIVE; then
+
+    echo -e "  ${DIM}Docker commands (docker compose up, docker logs, ...) are run on the host${RESET}"
+    echo -e "  ${DIM}by an OS user that belongs to the docker group.${RESET}"
+    echo ""
+    echo -e "  ${DIM}The user you choose here will own the repository files and its UID/GID${RESET}"
+    echo -e "  ${DIM}will be mapped inside the container to prevent permission errors.${RESET}"
+    echo ""
+    echo -e "  ${YELLOW}!${RESET} ${BOLD}Security Sandbox:${RESET}"
+    echo -e "    ${DIM}The process inside Docker ALWAYS runs as a non-root user.${RESET}"
+    echo -e "    ${DIM}Even if you select ${RESET}root${DIM} (3), the container will use ID 1000 for safety.${RESET}"
+    echo ""
+
+    if [ "$(detect_environment)" = "TrueNAS" ]; then
+        warn "TrueNAS detected — create the user from the TrueNAS UI first,"
+        warn "then select option 2 (existing user) below."
+        echo ""
+    fi
+
+    echo -e "  ${BOLD}Who should run Docker commands on this host?${RESET}"
+    echo ""
+    echo -e "    ${DIM}1)${RESET}  Create a new ${CYAN}pbgui${RESET} user  ${DIM}(recommended)${RESET}"
+    echo -e "    ${DIM}2)${RESET}  Use an existing user"
+    echo -e "    ${DIM}3)${RESET}  Continue as ${YELLOW}root${RESET}         ${DIM}(not recommended)${RESET}"
+    echo ""
+    echo -en "  ${CYAN}?${RESET} Your choice ${DIM}[1]${RESET}: "
+    read -r _choice
+    echo ""
+    _choice="${_choice:-1}"
+
+    case "$_choice" in
+        1)
+            if id "pbgui" &>/dev/null 2>&1; then
+                warn "User 'pbgui' already exists — skipping creation."
+            else
+                useradd -m -s /bin/bash pbgui
+                success "User 'pbgui' created."
+                DOCKER_USER_CREATED=true
+            fi
+            DOCKER_USER="pbgui"
+            if groups pbgui | grep -qw docker; then
+                success "User 'pbgui' is already in the docker group."
+            else
+                usermod -aG docker pbgui
+                DOCKER_GROUP_ADDED=true
+                success "User 'pbgui' added to the docker group."
+            fi
+            ;;
+        2)
+            while true; do
+                echo -en "  ${CYAN}+${RESET} Username: "
+                read -r _uname
+                echo ""
+                if id "$_uname" &>/dev/null 2>&1; then
+                    DOCKER_USER="$_uname"
+                    break
+                fi
+                warn "User '${_uname}' not found — try again."
+            done
+            unset _uname
+
+            if groups "$DOCKER_USER" | grep -qw docker; then
+                success "User '${DOCKER_USER}' is already in the docker group."
+            else
+                warn "User '${DOCKER_USER}' is not in the docker group."
+                if confirm "Add '${DOCKER_USER}' to the docker group?" "y"; then
+                    usermod -aG docker "$DOCKER_USER"
+                    DOCKER_GROUP_ADDED=true
+                    success "User '${DOCKER_USER}' added to the docker group."
+                else
+                    error "User '${DOCKER_USER}' needs docker group membership to run Docker commands."
+                fi
+            fi
+            ;;
+        3)
+            DOCKER_USER="root"
+            warn "Continuing as root."
+            ;;
+        *)
+            warn "Invalid choice — defaulting to root."
+            DOCKER_USER="root"
+            ;;
+    esac
+    unset _choice
+
+else
+    info "Non-interactive mode — using root as Docker user."
+fi
+
+# Read the UID/GID of the chosen user so they can be passed to docker compose
+# (container process user) and to the Dockerfile (container user creation).
+# For root, fall back to 1000:1000 so the container does not run as root.
+if [ "$DOCKER_USER" = "root" ]; then
+    DOCKER_UID=1000
+    DOCKER_GID=1000
+else
+    DOCKER_UID=$(id -u "$DOCKER_USER")
+    DOCKER_GID=$(id -g "$DOCKER_USER")
+fi
+
+echo ""
+info "Docker user      ${CYAN}${DOCKER_USER}${RESET}  ${DIM}(uid=${DOCKER_UID}  gid=${DOCKER_GID})${RESET}"
+if $DOCKER_USER_CREATED || $DOCKER_GROUP_ADDED; then
+    warn "Group membership takes effect after '${DOCKER_USER}' logs in for the first time."
+fi
+
+# ══════════════════════════════════════════════════════════════════════════════
+# STEP 3 — Environment Detection
 # ══════════════════════════════════════════════════════════════════════════════
 
 nextstep "Environment Detection"
@@ -277,7 +420,7 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STEP 3 — Install Location
+# STEP 4 — Install Location
 # ══════════════════════════════════════════════════════════════════════════════
 
 nextstep "Install Location"
@@ -313,7 +456,7 @@ info "Repository       ${CYAN}${REPO_DIR}${RESET}"
 info "Userdata         ${CYAN}${USERDATA_PATH}${RESET}"
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STEP 4 — Storage Provisioning
+# STEP 5 — Storage Provisioning
 # ══════════════════════════════════════════════════════════════════════════════
 
 nextstep "Storage Provisioning"
@@ -399,7 +542,7 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STEP 5 — Repository
+# STEP 6 — Repository
 # ══════════════════════════════════════════════════════════════════════════════
 
 nextstep "Repository"
@@ -429,19 +572,23 @@ else
 fi
 
 # ─── Load .env overrides ──────────────────────────────────────────────────────
-# If a .env file exists in the repository root, source it so that display
-# values (ports, container name) shown in the summary match docker-compose.
+# If a .env file exists in the repository root, extract only the specific
+# variables needed for display (ports, container name).
+# Parsing is done with grep/cut rather than sourcing the file as shell code,
+# which would execute arbitrary commands as root.
 ENV_FILE="${REPO_DIR}/.env"
 if [ -f "$ENV_FILE" ]; then
-    # shellcheck disable=SC1090
-    set -a; source "$ENV_FILE"; set +a
-    WEBUI_PORT="${PBGUI_WEBUI_PORT:-$WEBUI_PORT}"
-    API_PORT="${PBGUI_API_PORT:-$API_PORT}"
-    CONTAINER="${PBGUI_CONTAINER_NAME:-$CONTAINER}"
+    _env_webui=$(grep -E '^PBGUI_WEBUI_PORT='     "$ENV_FILE" | tail -1 | cut -d= -f2- | tr -d '"' | tr -d "'")
+    _env_api=$(grep   -E '^PBGUI_API_PORT='        "$ENV_FILE" | tail -1 | cut -d= -f2- | tr -d '"' | tr -d "'")
+    _env_ctr=$(grep   -E '^PBGUI_CONTAINER_NAME='  "$ENV_FILE" | tail -1 | cut -d= -f2- | tr -d '"' | tr -d "'")
+    WEBUI_PORT="${_env_webui:-$WEBUI_PORT}"
+    API_PORT="${_env_api:-$API_PORT}"
+    CONTAINER="${_env_ctr:-$CONTAINER}"
+    unset _env_webui _env_api _env_ctr
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STEP 6 — Files & Configuration
+# STEP 7 — Files & Configuration
 # ══════════════════════════════════════════════════════════════════════════════
 
 nextstep "Files & Configuration"
@@ -449,7 +596,9 @@ nextstep "Files & Configuration"
 # Subdirectory layout:
 #   pbgui_data/                    — PBGui runtime state (bots, UI preferences)
 #   historical_data/               — OHLCV market data, shared across tools
-#   configs/                       — App-level config (secrets.toml, ...)
+#   pbgui_ini/                     — pbgui.ini (mounted as dir to allow atomic saves)
+#   streamlit/                     — secrets.toml (mounted as dir to allow atomic saves)
+#   rclone/                        — rclone.conf cloud bucket credentials
 #   pb7/configs/                   — Passivbot v7 live trading configs
 #   pb7/backtests/                 — Backtest result archives
 #   pb7/optimize_results/          — Raw optimisation outputs
@@ -459,7 +608,8 @@ nextstep "Files & Configuration"
 SUBDIRS=(
     pbgui_data
     historical_data
-    configs
+    streamlit
+    rclone
     pb7/configs
     pb7/backtests
     pb7/optimize_results
@@ -480,8 +630,9 @@ for dir in "${SUBDIRS[@]}"; do
 done
 echo ""
 
-chmod -R 755 "$USERDATA_PATH"
-success "Permissions applied  ${DIM}755 (recursive)${RESET}"
+# Apply 755 to directories only; sensitive files receive 600 individually below.
+find "$USERDATA_PATH" -type d -exec chmod 755 {} +
+success "Permissions applied  ${DIM}755 (directories)${RESET}"
 
 # ── .env ──────────────────────────────────────────────────────────────────────
 
@@ -499,45 +650,128 @@ else
     info "Edit ${CYAN}${ENV_FILE}${RESET} to customise ports, resource limits, and image name."
 fi
 
-# ── api-keys.json ─────────────────────────────────────────────────────────────
+# Write UID/GID to .env so docker compose can pass them as build args to the
+# Dockerfile and use them in the 'user:' field to run the container process
+# as the same account that owns the files on the host.
+env_set PBGUI_UID "$DOCKER_UID"
+env_set PBGUI_GID "$DOCKER_GID"
+success "UID/GID written to .env  ${DIM}(${DOCKER_UID}:${DOCKER_GID})${RESET}"
 
-API_KEYS_FILE="${USERDATA_PATH}/api-keys.json"
-EXCHANGE_NAME="binance"
+# ── pbgui.ini ─────────────────────────────────────────────────────────────────
+# PBGui writes all UI-saved settings to pbgui.ini at runtime (CoinMarketCap
+# API key, PBRemote bucket, PBData config, VPS Monitor settings, exchange
+# configuration, …).  The file is persisted inside the data/ volume
+# (userdata/pbgui_data/pbgui.ini → /app/pbgui/data/pbgui.ini) which is already
+# a directory bind-mount.  entrypoint.sh copies it to the working path
+# /app/pbgui/pbgui.ini at container startup and writes it back on shutdown, so
+# configparser's atomic rename (write .tmp → rename to final) always operates
+# on a regular file and never hits [Errno 16] Device or resource busy.
+
+PBGUI_INI_FILE="${USERDATA_PATH}/pbgui_data/pbgui.ini"
 
 echo ""
 mini_divider
 echo ""
-echo -e "  ${BOLD}API keys${RESET}"
+echo -e "  ${BOLD}PBGui runtime configuration (pbgui.ini)${RESET}"
 echo ""
 
-if [ -f "$API_KEYS_FILE" ]; then
-    warn "api-keys.json already present — skipping  ${DIM}(may contain live credentials)${RESET}"
+if [ -f "$PBGUI_INI_FILE" ]; then
+    warn "pbgui.ini already present — skipping  ${DIM}(customisations preserved)${RESET}"
 else
-    if ! $NON_INTERACTIVE; then
-        info "A placeholder api-keys.json will be created."
-        info "Add real credentials later from the Web UI."
-        info "Supported exchanges: ${DIM}binance · bybit · bitget · gateio · hyperliquid · okx · kucoin · bingx${RESET}"
-        echo ""
-        prompt_input EXCHANGE_NAME "Default exchange" " [binance]"
-    fi
-
-    EXCHANGE_NAME_SAFE="$(sanitize_string "$EXCHANGE_NAME")"
-
-    cat > "$API_KEYS_FILE" <<EOF
-{
-  "default_user": {
-    "exchange": "${EXCHANGE_NAME_SAFE}",
-    "key": "",
-    "secret": ""
-  }
-}
+    cat > "$PBGUI_INI_FILE" <<EOF
+[main]
+pb7dir = /app/pb7
+pb7venv = /app/venv_pb7/bin/python
+pbname = mypassivbot
+[pbremote]
+bucket = pbgui:
 EOF
-    success "api-keys.json created"
+    chmod 600 "$PBGUI_INI_FILE"
+    success "pbgui.ini created  ${DIM}(minimal defaults — configure from the Web UI)${RESET}"
 fi
 
-# ── secrets.toml ──────────────────────────────────────────────────────────────
+# ── Services ──────────────────────────────────────────────────────────────────
+# Controls which background Python services are started at container boot.
+# The selection is stored in userdata/pbgui_data/services.conf, which is
+# already inside the mounted data/ volume — no image rebuild needed to change
+# it later.  entrypoint.sh reads this file at startup.
 
-SECRETS_FILE="${USERDATA_PATH}/configs/secrets.toml"
+SERVICES_CONF_FILE="${USERDATA_PATH}/pbgui_data/services.conf"
+
+# Canonical list of optional background services.
+# Format: "ScriptName.py|Short description|default(y/n)"
+_SERVICES=(
+    "PBRun.py|Bot runner — executes live trading instances|y"
+    "PBRemote.py|Remote sync — rclone cloud backup of configs|y"
+    "PBMon.py|Monitor — Telegram/webhook alerts|y"
+    "PBData.py|Data manager — downloads and caches OHLCV data|y"
+    "PBCoinData.py|CoinMarketCap data — market cap and coin info|y"
+)
+
+echo ""
+mini_divider
+echo ""
+echo -e "  ${BOLD}Background Services${RESET}"
+echo ""
+
+if [ -f "$SERVICES_CONF_FILE" ]; then
+    warn "services.conf already present — skipping  ${DIM}(edit manually to change)${RESET}"
+else
+    if ! $NON_INTERACTIVE; then
+        echo -e "  ${DIM}Choose which services to start automatically when the container boots.${RESET}"
+        echo -e "  ${DIM}All services are enabled by default; disable what you don't need to save resources.${RESET}"
+        echo ""
+
+        declare -A _svc_enabled
+        for _entry in "${_SERVICES[@]}"; do
+            IFS='|' read -r _script _desc _default <<< "$_entry"
+            if mini_confirm "  Enable ${CYAN}${_script}${RESET}  ${DIM}(${_desc})${RESET}?" "$_default"; then
+                _svc_enabled["$_script"]="true"
+                success "${_script} enabled"
+                echo ""
+            else
+                _svc_enabled["$_script"]="false"
+                info "${_script} disabled"
+                echo ""
+            fi
+        done
+    else
+        # Non-interactive: enable everything by default.
+        declare -A _svc_enabled
+        for _entry in "${_SERVICES[@]}"; do
+            IFS='|' read -r _script _desc _default <<< "$_entry"
+            _svc_enabled["$_script"]="true"
+        done
+        info "Non-interactive mode — all services enabled."
+    fi
+
+    # Write services.conf — one KEY=VALUE per line, parseable by bash and sh.
+    {
+        echo "# pbgui-docker — services.conf"
+        echo "# Controls which background services start at container boot."
+        echo "# Set to 'true' to enable, 'false' to disable."
+        echo "# Changes take effect on the next 'docker compose restart'."
+        echo ""
+        for _entry in "${_SERVICES[@]}"; do
+            IFS='|' read -r _script _desc _default <<< "$_entry"
+            # Derive a clean variable name: PBRun.py → ENABLE_PBRUN
+            _key="ENABLE_$(echo "${_script%.py}" | tr '[:lower:]' '[:upper:]')"
+            echo "# ${_desc}"
+            echo "${_key}=${_svc_enabled[$_script]}"
+        done
+    } > "$SERVICES_CONF_FILE"
+
+    chmod 644 "$SERVICES_CONF_FILE"
+    success "services.conf created"
+fi
+unset _SERVICES _svc_enabled _entry _script _desc _default _key
+
+# ── secrets.toml ──────────────────────────────────────────────────────────────
+# Mounted as a directory (userdata/streamlit/ → /app/pbgui/.streamlit/) for the
+# same reason as pbgui.ini: Streamlit saves secrets via atomic rename, which
+# requires the parent directory to be a writable bind mount, not the file itself.
+
+SECRETS_FILE="${USERDATA_PATH}/streamlit/secrets.toml"
 ENABLE_AUTH=false
 AUTH_PASSWORD=""
 
@@ -585,6 +819,82 @@ EOF
         success "Authentication disabled!"
         warn "If you plan to make PBGui accessible over the internet, set a password through the UI as soon as possible."
     fi
+
+    chmod 600 "$SECRETS_FILE"
+fi
+
+# ── rclone.conf ───────────────────────────────────────────────────────────────
+# rclone reads its config from ~/.config/rclone/rclone.conf.  Inside the
+# container the pbgui user's HOME is /app, so the effective path is
+# /app/.config/rclone/rclone.conf — bind-mounted from userdata/rclone/.
+# Mounted as a directory to allow atomic writes by rclone.
+
+RCLONE_CONF_FILE="${USERDATA_PATH}/rclone/rclone.conf"
+
+echo ""
+mini_divider
+echo ""
+echo -e "  ${BOLD}rclone configuration (rclone.conf)${RESET}"
+echo ""
+
+if [ -f "$RCLONE_CONF_FILE" ]; then
+    warn "rclone.conf already present — skipping  ${DIM}(credentials preserved)${RESET}"
+else
+    touch "$RCLONE_CONF_FILE"
+    chmod 600 "$RCLONE_CONF_FILE"
+    success "rclone.conf placeholder created  ${DIM}(configure PBRemote from the Web UI)${RESET}"
+fi
+
+# ── api-keys.json ─────────────────────────────────────────────────────────────
+
+API_KEYS_FILE="${USERDATA_PATH}/api-keys.json"
+EXCHANGE_NAME="binance"
+
+echo ""
+mini_divider
+echo ""
+echo -e "  ${BOLD}API keys${RESET}"
+echo ""
+
+if [ -f "$API_KEYS_FILE" ]; then
+    warn "api-keys.json already present — skipping  ${DIM}(may contain live credentials)${RESET}"
+else
+    if ! $NON_INTERACTIVE; then
+        info "A placeholder api-keys.json will be created."
+        info "Add real credentials later from the Web UI."
+        info "Supported exchanges: ${DIM}binance · bybit · bitget · gateio · hyperliquid · okx · kucoin · bingx${RESET}"
+        echo ""
+        prompt_input EXCHANGE_NAME "Default exchange" " [binance]"
+    fi
+
+    EXCHANGE_NAME_SAFE="$(sanitize_string "$EXCHANGE_NAME")"
+
+    cat > "$API_KEYS_FILE" <<EOF
+{
+  "default_user": {
+    "exchange": "${EXCHANGE_NAME_SAFE}",
+    "key": "",
+    "secret": ""
+  }
+}
+EOF
+    chmod 600 "$API_KEYS_FILE"
+    success "api-keys.json created"
+fi
+
+# ── Ownership ─────────────────────────────────────────────────────────────────
+
+# userdata: owned by the same UID/GID used to run the container process,
+# so the application can read and write bind-mounted volumes without errors.
+chown -R "${DOCKER_UID}:${DOCKER_GID}" "$USERDATA_PATH"
+success "Ownership applied    ${DIM}${DOCKER_UID}:${DOCKER_GID} (container user)${RESET}"
+
+# Repository top-level files: owned by the host Docker user so they can run
+# docker compose commands without root after installation.
+# userdata/ is excluded here — its ownership was set above.
+if [ "$DOCKER_USER" != "root" ]; then
+    find "$REPO_DIR" -maxdepth 1 ! -name "userdata" -exec chown "${DOCKER_USER}:${DOCKER_GID}" {} +
+    success "Repository owned by  ${DIM}${DOCKER_USER}${RESET}"
 fi
 
 # ── Pre-launch summary ────────────────────────────────────────────────────────
@@ -600,6 +910,7 @@ info "Environment      ${CYAN}${ENV_TYPE}${RESET}"
 info "Install base     ${CYAN}${INSTALL_BASE}${RESET}"
 info "Repository       ${CYAN}${REPO_DIR}${RESET}"
 info "Userdata         ${CYAN}${USERDATA_PATH}${RESET}"
+info "Docker user      ${CYAN}${DOCKER_USER}${RESET}  ${DIM}(uid=${DOCKER_UID}  gid=${DOCKER_GID})${RESET}"
 $DATASET_CREATED && info "ZFS dataset      ${GREEN}created${RESET}  ${DIM}(${ZFS_DATASET})${RESET}"
 if $ENABLE_AUTH; then
     info "Auth             ${GREEN}Enabled${RESET}"
@@ -616,7 +927,7 @@ if ! $NON_INTERACTIVE; then
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STEP 7 — Build & Launch
+# STEP 8 — Build & Launch
 # ══════════════════════════════════════════════════════════════════════════════
 
 nextstep "Build & Launch"
@@ -661,7 +972,7 @@ fi
 docker compose up -d
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STEP 8 — Wait for Healthy
+# STEP 9 — Wait for Healthy
 # ══════════════════════════════════════════════════════════════════════════════
 
 nextstep "Verifying Health"
@@ -738,6 +1049,10 @@ divider
 echo ""
 echo -e "  ${BOLD}Useful commands${RESET}"
 echo ""
+if [ "$DOCKER_USER" != "root" ]; then
+    echo -e "  ${DIM}Run the following as ${RESET}${CYAN}${DOCKER_USER}${RESET}${DIM} — switch with:${RESET}  ${CYAN}su - ${DOCKER_USER}${RESET}"
+    echo ""
+fi
 echo -e "    ${DIM}View logs   ${RESET}${CYAN}docker logs -f ${CONTAINER}${RESET}"
 echo -e "    ${DIM}Stop        ${RESET}${CYAN}docker compose down${RESET}"
 echo -e "    ${DIM}Restart     ${RESET}${CYAN}docker compose restart${RESET}"

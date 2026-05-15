@@ -1,7 +1,7 @@
 # ---------------------------------------------------
 # 1. Project data and sensitive credentials
 # ---------------------------------------------------
-.userdata/
+userdata/
 api-keys.json
 secrets.toml
 config/secrets.toml

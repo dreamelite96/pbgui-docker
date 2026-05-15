@@ -16,7 +16,11 @@ services:
 
   # PBGui
   pbgui:
-    build: .
+    build:
+      context: .
+      args:
+        PBGUI_UID: ${PBGUI_UID:-1000}
+        PBGUI_GID: ${PBGUI_GID:-1000}
 
     # Local image tag — useful for inspecting history and rolling back to a
     # previously built image without rebuilding from scratch.
@@ -25,13 +29,16 @@ services:
 
     container_name: ${PBGUI_CONTAINER_NAME:-pbgui}
 
+    # Run the container process as the same UID/GID used to build it.
+    # This matches the host user that owns the bind-mounted volumes,
+    # so files written inside the container are accessible on the host
+    # without permission errors.
+    user: "${PBGUI_UID:-1000}:${PBGUI_GID:-1000}"
+
     # ── Security ────────────────────────────────────────────────────────────
     cap_drop:
       - ALL
     cap_add:
-      - CHOWN
-      - SETUID
-      - SETGID
       - DAC_OVERRIDE
       - FOWNER
     security_opt:
@@ -81,13 +88,22 @@ services:
     # ── Volumes ─────────────────────────────────────────────────────────────
     volumes:
       # ── PBGui ── #
-      # Persists bot list, session state, and UI settings managed through the
-      # PBGui web interface across container restarts and image upgrades.
+      # Persists bot list, session state, UI settings, logs, job queues,
+      # SQLite database (PBData), PID files, coindata cache, and pbgui.ini.
+      # pbgui.ini is stored here (data/pbgui.ini) and synced to the working
+      # directory by entrypoint.sh at startup / on shutdown, so configparser's
+      # atomic rename never hits a Docker mount point.
       - ./userdata/pbgui_data:/app/pbgui/data
 
-      # Streamlit secrets file: holds the PBGui login password and any other
-      # sensitive runtime configuration values read at application startup.
-      - ./userdata/configs/secrets.toml:/app/pbgui/.streamlit/secrets.toml
+      # .streamlit/: directory mount so Streamlit can write secrets.toml
+      # atomically (rename pattern) without hitting [Errno 16] on a file mount.
+      - ./userdata/streamlit:/app/pbgui/.streamlit
+
+      # rclone/: directory mount for rclone cloud bucket credentials.
+      # The user pbgui's HOME is /app, so rclone reads/writes
+      # /app/.config/rclone/rclone.conf at runtime.
+      # Mounted as a directory to allow atomic writes by rclone.
+      - ./userdata/rclone:/app/.config/rclone
 
       # ── Shared data ── #
       # Mounting historical market data and API keys from a single host path

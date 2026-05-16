@@ -22,6 +22,7 @@
 - [Updating](#updating)
 - [Managing](#managing)
 - [Contributing](#contributing)
+- [Security](#security)
 
 ## Overview
 
@@ -252,6 +253,13 @@ If you find this project useful and want to support its development, consider bu
 <a href="https://www.buymeacoffee.com/dreamelite96" target="_blank">
   <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" width="200" height="50">
 </a>
+
+***
+
+## Security
+
+To report a vulnerability, please follow the [Security Policy](SECURITY.md).
+Do not open a public issue for security-sensitive matters.
 
 ***
 

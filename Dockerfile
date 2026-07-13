@@ -52,9 +52,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python-is-python3 \
     python3-pip \
     rclone \
-    && add-apt-repository ppa:deadsnakes/ppa -y \
-    && apt-get update && apt-get install -y --no-install-recommends \
-    python3.12 python3.12-venv python3.12-dev \
+    python3.12 \
+    python3.12-venv \
+    python3.12-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Rust toolchain ────────────────────────────────────────────────────────────
@@ -120,7 +120,10 @@ RUN python3.12 -m venv venv_pb7 \
 #     for maximum runtime performance.
 #  3. Symlink venv_pb7 to pb7/.venv so that maturin and other tooling can
 #     auto-discover the virtual environment without explicit activation.
-RUN . venv_pb7/bin/activate \
+#  4. Leverage Docker cache mounts for cargo registries and compilation targets.
+RUN --mount=type=cache,target=/opt/cargo/registry,mode=0777 \
+    --mount=type=cache,target=/app/pb7/passivbot-rust/target,mode=0777 \
+    . venv_pb7/bin/activate \
     && cd pb7 \
     && pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt \
@@ -139,12 +142,12 @@ RUN . venv_pbgui/bin/activate \
 # pbgui.ini is persisted via userdata/pbgui_data/ → /app/pbgui/data/ (already
 # a directory mount).  The entrypoint copies pbgui.ini from data/ into the
 # working directory at every startup, and writes it back on clean exit.
-# A default copy is placed in data/ here so the first boot has a valid file.
+# A default copy is placed in the working directory as pbgui.ini.default here so the
+# first boot can seed the persistent volume if it is empty.
 # The actual working copy at /app/pbgui/pbgui.ini is written by the entrypoint
 # and is never mounted directly, so configparser's atomic rename always works.
-RUN mkdir -p /app/pbgui/data \
-    && printf '[main]\npb7dir = /app/pb7\npb7venv = /app/venv_pb7/bin/python\npbname = mypassivbot\n[pbremote]\nbucket = pbgui:\n' \
-       > /app/pbgui/data/pbgui.ini
+RUN printf '[main]\npb7dir = /app/pb7\npb7venv = /app/venv_pb7/bin/python\npbname = mypassivbot\n[pbremote]\nbucket = pbgui:\n' \
+       > /app/pbgui/pbgui.ini.default
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -179,6 +182,8 @@ WORKDIR /app
 # • curl              : healthcheck + rustup self-update path.
 # • libgomp1          : OpenMP runtime required by numba (pb7 dep).
 # • python-is-python3 : makes bare `python` resolve to python3.
+# • gcc + libc6-dev   : linker and development headers needed at runtime
+#                       by maturin/cargo to compile Rust extensions.
 # build-essential and software-properties-common are intentionally absent.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
@@ -191,6 +196,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.12 \
     python3.12-venv \
     libgomp1 \
+    gcc \
+    libc6-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -206,8 +213,9 @@ RUN rm -f /usr/lib/python3.12/EXTERNALLY-MANAGED
 # Needed at runtime because the Ansible update playbook runs:
 #   rustup toolchain install/update  →  maturin develop --release
 # Copying the pre-built toolchain avoids re-downloading it on every update.
-COPY --from=builder /opt/rustup /opt/rustup
-COPY --from=builder /opt/cargo  /opt/cargo
+# --chown ensures permissions are set correctly for the non-root user.
+COPY --from=builder --chown=pbgui:pbgui /opt/rustup /opt/rustup
+COPY --from=builder --chown=pbgui:pbgui /opt/cargo  /opt/cargo
 
 # ── Recreate runtime user with the same UID/GID ──────────────────────────────
 # The user must be recreated in the runtime stage because /etc/passwd and
@@ -241,9 +249,7 @@ COPY --from=builder --chown=pbgui:pbgui /app/.local /app/.local
 USER pbgui
 
 # ── Exposed ports ─────────────────────────────────────────────────────────────
-# 8501 : Streamlit web interface (PBGui)
-# 8000 : FastAPI REST interface   (PBGui optional API)
-EXPOSE 8501
+# 8000 : FastAPI REST interface & HTML/JS Web UI
 EXPOSE 8000
 
 # ── Container entrypoint ──────────────────────────────────────────────────────

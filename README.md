@@ -26,7 +26,7 @@
 
 ## Overview
 
-**PBGui-Docker** provides a ready-to-use Docker setup to deploy [PBGui](https://github.com/msei99/pbgui) by msei99 — a Streamlit-based web GUI for managing [Passivbot v7](https://github.com/enarjord/passivbot) trading bot instances — inside an isolated Docker container.
+**PBGui-Docker** provides a ready-to-use Docker setup to deploy [PBGui](https://github.com/msei99/pbgui) by msei99 — a FastAPI-based web GUI for managing [Passivbot v7](https://github.com/enarjord/passivbot) trading bot instances — inside an isolated Docker container.
 
 The image is built on **Ubuntu 24.04 LTS** and bundles the full dependency stack at build time:
 
@@ -43,7 +43,7 @@ The image is built on **Ubuntu 24.04 LTS** and bundles the full dependency stack
 - 💾 **Persistent volumes** — all data, configs, backtests, and API keys survive container restarts
 - 🔄 **Re-runnable setup script** — can be safely run multiple times; never overwrites existing credentials
 - 🔒 **Security-hardened** — runs with dropped Linux capabilities and `no-new-privileges`; the container process runs as a non-root user whose UID/GID matches the host user that owns the bind-mounted volumes
-- 🩺 **Healthcheck built-in** — Docker automatically monitors the Streamlit interface
+- 🩺 **Healthcheck built-in** — Docker automatically monitors the FastAPI interface
 - 🖥️ **TrueNAS SCALE compatible** — `install.sh` detects TrueNAS environments and adapts accordingly
 
 
@@ -64,8 +64,7 @@ pbgui-docker/
 ├── README.md               # This file
 └── userdata/               # Created by the installer — all persistent data lives here
     ├── api-keys.json       # Exchange API credentials
-    ├── configs/            # secrets.toml and other app-level config
-    ├── pbgui_data/         # PBGui runtime state, bot list, UI settings
+    ├── pbgui_data/         # PBGui runtime state, bot list, UI settings, and auth/secrets.toml
     ├── historical_data/    # Downloaded OHLCV market data
     └── pb7/                # Passivbot v7 configs, backtests, and optimisation results
 ```
@@ -122,13 +121,13 @@ The installer walks you through a short interactive setup. All prompts have a de
 
 3. **Default exchange** — pre-populates `api-keys.json` with the exchange name *(default: `binance`)*; supported values include `bybit`, `bitget`, `gateio`, `hyperliquid`, `okx`, `kucoin`, `bingx`. Real API credentials are added later from the Web UI.
 
-4. **Password protection** — optionally set a login password for the Web UI. Can be enabled or changed at any time from the Web UI or by editing `userdata/configs/secrets.toml`.
+4. **Password protection** — optionally set a login password for the Web UI. Can be enabled or changed at any time from the Web UI or by editing `userdata/pbgui_data/auth/secrets.toml`.
 
 ### First-Time Setup
 
 Once the installer reports **PBGui is up and running**:
 
-1. Open the Web UI at **http://\<your-host-ip\>:8501**
+1. Open the Web UI at **http://\<your-host-ip\>:8000**
 2. Add your exchange **Wallet Address** and **Private Key** under **System → API-Keys**
 3. Add your **CoinMarketCap API key** under **System → API-Keys**
 4. You're ready — create your first bot instance under **PBv7 → Run**
@@ -139,7 +138,7 @@ Once the installer reports **PBGui is up and running**:
 
 ### Configure your API keys
 
-API keys can be configured directly from the **PBGui web interface** at `http://<your-host-ip>:8501` — no manual file editing required.
+API keys can be configured directly from the **PBGui web interface** at `http://<your-host-ip>:8000` — no manual file editing required.
 
 Alternatively, you can edit `userdata/api-keys.json` directly:
 
@@ -155,9 +154,9 @@ Alternatively, you can edit `userdata/api-keys.json` directly:
 
 ### Enable password protection
 
-The PBGui-Docker installer will ask you to set a password for the Web UI directly, but you can also set it from the **PBGui web interface** at `http://<your-host-ip>:8501`.
+The PBGui-Docker installer will ask you to set a password for the Web UI directly, but you can also set it from the **PBGui web interface** at `http://<your-host-ip>:8000`.
 
-Alternatively, you can enable it manually by editing `userdata/configs/secrets.toml` and adding:
+Alternatively, you can enable it manually by editing `userdata/pbgui_data/auth/secrets.toml` and adding:
 
 ```toml
 password = "your-strong-password"
@@ -165,12 +164,9 @@ password = "your-strong-password"
 
 ***
 
-## Accessing the Interface
-
 | Interface | URL |
 |---|---|
-| WebUI (Streamlit) | http://\<your-host-ip\>:8501 |
-| New WebUI (FastAPI) | http://\<your-host-ip\>:8000 |
+| WebUI & API (FastAPI) | http://\<your-host-ip\>:8000 |
 
 ***
 
@@ -181,7 +177,7 @@ All persistent data is stored under `./userdata/` on the host and mapped into th
 | Host path | Container path | Description |
 |---|---|---|
 | `./userdata/pbgui_data` | `/app/pbgui/data` | PBGui runtime state, bot list, UI settings |
-| `./userdata/configs/secrets.toml` | `/app/pbgui/.streamlit/secrets.toml` | Streamlit secrets and optional login password |
+| `./userdata/pbgui_data/auth/secrets.toml` | `/app/pbgui/data/auth/secrets.toml` | FastAPI secrets and optional login password |
 | `./userdata/api-keys.json` | `/app/pb7/api-keys.json` | Exchange API credentials |
 | `./userdata/historical_data` | `/app/pb7/historical_data` | Downloaded OHLCV market data |
 | `./userdata/pb7/configs` | `/app/pb7/configs` | Passivbot v7 live trading configs |
@@ -206,7 +202,7 @@ The container is configured with the following default resource limits (adjustab
 ## Updating
 
 ### Update PBGui / Passivbot v7
-PBGui and Passivbot v7 can be updated directly from the **PBGui web interface** at `http://<your-host-ip>:8501` — no terminal access required.
+PBGui and Passivbot v7 can be updated directly from the **PBGui web interface** at `http://<your-host-ip>:8000` — no terminal access required.
 
 ### Rebuild the Docker image
 If you made changes to the `Dockerfile` or need a fresh image build:

@@ -13,7 +13,7 @@
 # ──────────────────────────────────────────────────────────────────────────────
 
 # entrypoint.sh — Sync pbgui.ini between the persistent data/ volume and the
-# PBGui working directory, then start Streamlit.
+# PBGui working directory, then start PBApiServer.
 #
 # Root cause: pbgui.ini is always read and written at its absolute path
 # /app/pbgui/pbgui.ini (via PBGDIR from pbgui_purefunc.py).  When saving,
@@ -32,14 +32,25 @@ set -euo pipefail
 
 PERSISTENT_INI="/app/pbgui/data/pbgui.ini"
 WORKING_INI="/app/pbgui/pbgui.ini"
+DEFAULT_INI="/app/pbgui/pbgui.ini.default"
 
-# ── Startup: restore saved config into the working location ──────────────────
+# ── Startup: seed persistent config if empty, then restore to working path ───
+if [ ! -f "$PERSISTENT_INI" ] && [ -f "$DEFAULT_INI" ]; then
+    echo "Seeding default pbgui.ini to persistent storage..."
+    mkdir -p "$(dirname "$PERSISTENT_INI")"
+    cp "$DEFAULT_INI" "$PERSISTENT_INI"
+fi
+
 if [ -f "$PERSISTENT_INI" ]; then
     cp "$PERSISTENT_INI" "$WORKING_INI"
 fi
 
+# ── Startup: clear stale PID files from previous container runs ──────────────
+echo "Clearing stale PID files..."
+rm -f /app/pbgui/data/pid/*.pid 2>/dev/null || true
+
 # ── Background watcher: sync pbgui.ini → data/ whenever it changes ───────────
-# docker stop sends SIGTERM directly to the PID 1 process (Streamlit after
+# docker stop sends SIGTERM directly to the PID 1 process (PBApiServer after
 # exec), bypassing any bash trap — so copy-on-shutdown is unreliable.
 # Instead, a background loop polls the working file every 5 seconds and
 # copies it to the persistent location as soon as its mtime changes.
@@ -62,8 +73,8 @@ _watch_ini &
 WATCHER_PID=$!
 
 # ── Shutdown trap: final sync + kill watcher ─────────────────────────────────
-# This trap fires when the entrypoint shell exits (after Streamlit returns),
-# not on SIGTERM to Streamlit itself — but it covers clean exit paths.
+# This trap fires when the entrypoint shell exits (after PBApiServer returns),
+# not on SIGTERM to PBApiServer itself — but it covers clean exit paths.
 _cleanup() {
     if [ -f "$WORKING_INI" ]; then
         cp "$WORKING_INI" "$PERSISTENT_INI"
@@ -101,10 +112,12 @@ _svc_enabled() {
     fi
 }
 
-[ "$(_svc_enabled ENABLE_PBRUN)"      = "true" ] && /app/venv_pbgui/bin/python PBRun.py &
-[ "$(_svc_enabled ENABLE_PBREMOTE)"   = "true" ] && /app/venv_pbgui/bin/python PBRemote.py &
-[ "$(_svc_enabled ENABLE_PBMON)"      = "true" ] && /app/venv_pbgui/bin/python PBMon.py &
-[ "$(_svc_enabled ENABLE_PBDATA)"     = "true" ] && /app/venv_pbgui/bin/python PBData.py &
-[ "$(_svc_enabled ENABLE_PBCOINDATA)" = "true" ] && /app/venv_pbgui/bin/python PBCoinData.py &
+[ "$(_svc_enabled ENABLE_PBRUN)"          = "true" ] && /app/venv_pbgui/bin/python PBRun.py &
+[ "$(_svc_enabled ENABLE_PBDATA)"         = "true" ] && /app/venv_pbgui/bin/python PBData.py &
+[ "$(_svc_enabled ENABLE_PBCOINDATA)"     = "true" ] && /app/venv_pbgui/bin/python PBCoinData.py &
+[ "$(_svc_enabled ENABLE_PBCLUSTER)"      = "true" ] && /app/venv_pbgui/bin/python PBCluster.py &
+[ "$(_svc_enabled ENABLE_MONITOR_AGENT)"  = "true" ] && /app/venv_pbgui/bin/python monitor_agent.py &
 
-/app/venv_pbgui/bin/streamlit run pbgui.py --server.address=0.0.0.0
+# Start the new FastAPI-based API/Web UI server as the foreground process
+exec /app/venv_pbgui/bin/python PBApiServer.py
+

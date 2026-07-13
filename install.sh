@@ -139,8 +139,7 @@ REPO_URL="https://github.com/dreamelite96/pbgui-docker.git"
 REPO_DIRNAME="pbgui-docker"
 
 # Default port values — overridden later by .env if present.
-WEBUI_PORT="8501"
-API_PORT="8000"
+WEBUI_PORT="8000"
 CONTAINER="pbgui"
 
 # Host user that will own and manage the Docker setup after installation.
@@ -579,12 +578,10 @@ fi
 ENV_FILE="${REPO_DIR}/.env"
 if [ -f "$ENV_FILE" ]; then
     _env_webui=$(grep -E '^PBGUI_WEBUI_PORT='     "$ENV_FILE" | tail -1 | cut -d= -f2- | tr -d '"' | tr -d "'")
-    _env_api=$(grep   -E '^PBGUI_API_PORT='        "$ENV_FILE" | tail -1 | cut -d= -f2- | tr -d '"' | tr -d "'")
     _env_ctr=$(grep   -E '^PBGUI_CONTAINER_NAME='  "$ENV_FILE" | tail -1 | cut -d= -f2- | tr -d '"' | tr -d "'")
     WEBUI_PORT="${_env_webui:-$WEBUI_PORT}"
-    API_PORT="${_env_api:-$API_PORT}"
     CONTAINER="${_env_ctr:-$CONTAINER}"
-    unset _env_webui _env_api _env_ctr
+    unset _env_webui _env_ctr
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -608,7 +605,6 @@ nextstep "Files & Configuration"
 SUBDIRS=(
     pbgui_data
     historical_data
-    streamlit
     rclone
     pb7/configs
     pb7/backtests
@@ -771,7 +767,7 @@ unset _SERVICES _svc_enabled _entry _script _desc _default _key
 # same reason as pbgui.ini: Streamlit saves secrets via atomic rename, which
 # requires the parent directory to be a writable bind mount, not the file itself.
 
-SECRETS_FILE="${USERDATA_PATH}/streamlit/secrets.toml"
+SECRETS_FILE="${USERDATA_PATH}/pbgui_data/auth/secrets.toml"
 ENABLE_AUTH=false
 AUTH_PASSWORD=""
 
@@ -799,16 +795,18 @@ else
 
     if $ENABLE_AUTH && [ -n "$AUTH_PASSWORD" ]; then
         AUTH_PASSWORD_SAFE="$(sanitize_string "$AUTH_PASSWORD")"
+        mkdir -p "$(dirname "$SECRETS_FILE")"
         cat > "$SECRETS_FILE" <<EOF
-# PBGui — Streamlit secrets
+# PBGui — FastAPI secrets
 # Authentication: ENABLED
 
 password = "${AUTH_PASSWORD_SAFE}"
 EOF
         success "Password set successfully!"
     else
+        mkdir -p "$(dirname "$SECRETS_FILE")"
         cat > "$SECRETS_FILE" <<'EOF'
-# PBGui — Streamlit secrets
+# PBGui — FastAPI secrets
 # Authentication: DISABLED (open access)
 #
 # To enable, add the line below and restart:
@@ -917,8 +915,7 @@ if $ENABLE_AUTH; then
 else
     info "Auth             ${YELLOW}Disabled${RESET}"
 fi
-info "Web UI           ${CYAN}http://${HOST_IP}:${WEBUI_PORT}${RESET}"
-info "FastAPI          ${CYAN}http://${HOST_IP}:${API_PORT}${RESET}"
+info "Web UI & API     ${CYAN}http://${HOST_IP}:${WEBUI_PORT}${RESET}"
 echo ""
 divider
 
@@ -1042,8 +1039,7 @@ divider
 echo ""
 echo -e "  ${GREEN}${BOLD}PBGui is up and running!${RESET}"
 echo ""
-info "Web UI (Streamlit)  →  ${CYAN}http://${HOST_IP}:${WEBUI_PORT}${RESET}"
-info "Web UI (FastAPI)    →  ${CYAN}http://${HOST_IP}:${API_PORT}${RESET}"
+info "Web UI & API  →  ${CYAN}http://${HOST_IP}:${WEBUI_PORT}${RESET}"
 echo ""
 divider
 echo ""

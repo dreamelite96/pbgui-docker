@@ -38,9 +38,6 @@ services:
     # ── Security ────────────────────────────────────────────────────────────
     cap_drop:
       - ALL
-    cap_add:
-      - DAC_OVERRIDE
-      - FOWNER
     security_opt:
       - no-new-privileges:true
     privileged: false
@@ -56,14 +53,12 @@ services:
           memory: ${PBGUI_MEMORY_LIMIT:-8192M}
 
     # ── Ports ───────────────────────────────────────────────────────────────
-    # Host-side values are read from .env; internal container ports are fixed.
+    # The new FastAPI-based Web UI runs on port 8000. Port 8501 (Streamlit) is obsolete.
     ports:
-      - "${PBGUI_WEBUI_PORT:-8501}:8501"
-      - "${PBGUI_API_PORT:-8000}:8000"
+      - "${PBGUI_WEBUI_PORT:-8000}:8000"
     
     # ── Healthcheck ─────────────────────────────────────────────────────────
-    # Always targets the fixed internal port (8501), regardless of the host
-    # port configured above.
+    # Targets the FastAPI health endpoint on port 8000.
     healthcheck:
       test:
         - CMD
@@ -75,7 +70,7 @@ services:
         - /dev/null
         - '--show-error'
         - '--fail'
-        - http://127.0.0.1:8501/healthz
+        - http://127.0.0.1:8000/health
       interval: 30s
       timeout: 5s
       retries: 5
@@ -95,9 +90,9 @@ services:
       # atomic rename never hits a Docker mount point.
       - ./userdata/pbgui_data:/app/pbgui/data
 
-      # .streamlit/: directory mount so Streamlit can write secrets.toml
-      # atomically (rename pattern) without hitting [Errno 16] on a file mount.
-      - ./userdata/streamlit:/app/pbgui/.streamlit
+      # (Development only) Uncomment the line below to mount your local pbgui-main source
+      # for live debugging and testing of code changes:
+      # - ./pbgui-main:/app/pbgui
 
       # rclone/: directory mount for rclone cloud bucket credentials.
       # The user pbgui's HOME is /app, so rclone reads/writes
@@ -128,6 +123,13 @@ services:
     # ── Labels ──────────────────────────────────────────────────────────────
     labels:
       - "com.centurylinklabs.watchtower.enable=false"
+
+    # ── Logging ─────────────────────────────────────────────────────────────
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 # Networks
 networks:

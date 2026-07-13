@@ -57,15 +57,11 @@ without needing `chmod 777` or running as root.
 
 ### Dropped Linux capabilities
 
-The container drops **all** Linux capabilities by default and re-adds only the
-minimum required for correct operation:
+The container drops **all** Linux capabilities by default:
 
 ```yaml
 cap_drop:
   - ALL
-cap_add:
-  - DAC_OVERRIDE
-  - FOWNER
 ```
 
 `no-new-privileges: true` prevents any process inside the container from gaining
@@ -120,7 +116,7 @@ Limits are configurable in `.env` / `docker-compose.yml`.
 
 - Exchange API keys are stored in `userdata/api-keys.json`, which is bind-mounted
   into the container and **never baked into the image**.
-- The optional Web UI password is stored in `userdata/streamlit/secrets.toml`,
+- The optional Web UI password is stored in `userdata/pbgui_data/auth/secrets.toml`,
   also bind-mounted and excluded from the image and from version control via
   `.gitignore` / `.dockerignore`.
 - The `.env` file (which contains `PBGUI_UID`, `PBGUI_GID`, port mappings, and
@@ -128,18 +124,18 @@ Limits are configurable in `.env` / `docker-compose.yml`.
 
 ### Healthcheck
 
-A built-in Docker healthcheck polls the Streamlit endpoint every 30 seconds
-(`GET http://127.0.0.1:8501/healthz`). The check always targets the fixed
+A built-in Docker healthcheck polls the FastAPI endpoint every 30 seconds
+(`GET http://127.0.0.1:8000/health`). The check always targets the fixed
 internal container port, regardless of the host-side port mapping.
 
 ---
 
 ## Recommendations for Operators
 
-- **Do not expose ports 8501 / 8000 to the public internet** without placing a
-  reverse proxy (e.g. Nginx, Caddy, Traefik) with TLS in front of them.
+- **Do not expose port 8000 to the public internet** without placing a
+  reverse proxy (e.g. Nginx, Caddy, Traefik) with TLS in front of it.
 - **Enable the Web UI password** during installation or by editing
-  `userdata/streamlit/secrets.toml` — the UI has no authentication by default.
+  `userdata/pbgui_data/auth/secrets.toml` — the UI has no authentication by default.
 - **Keep Docker and the host OS up to date.** The base image (`ubuntu:24.04`) and
   runtime packages should be patched regularly by rebuilding the image:
   ```bash

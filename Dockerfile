@@ -19,8 +19,9 @@
 #                                  PBGui's Ansible update flow calls rustup +
 #                                  maturin develop --release at runtime)
 #   • /app/venv_pb7              (compiled passivbot-rust wheel installed)
-#   • /app/venv_pbgui
-#   • /app/pbgui  /app/pb7       (source clones)
+#   • /app/venv_pb8              (Passivbot v8 dependencies + rust extension)
+#   • /app/venv_pbgui            (FastAPI PBGui dependencies)
+#   • /app/pbgui /app/pb7 /app/pb8 (source clones)
 # Nothing from this stage's apt cache or build-essential layers
 # leaks into the final image.
 # ══════════════════════════════════════════════════════════════════════════════
@@ -34,6 +35,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 ARG PBGUI_UID=1000
 ARG PBGUI_GID=1000
+ARG PBGUI_COMMIT=37942d20e4670e2c97c5477ec0af413a6e94a294
+ARG PB7_COMMIT=fc6b9e016e04a3723bb5fe8847f1500049fa982c
+ARG PB8_COMMIT=a0897f83932db5e6888c1c96f8f1c668d452013f
 
 WORKDIR /app
 
@@ -58,8 +62,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Rust toolchain ────────────────────────────────────────────────────────────
-# Passivbot v7 ships a performance-critical extension written in Rust
-# (passivbot-rust) that must be compiled with maturin at build time.
+# Passivbot v7 and v8 ship performance-critical extensions written in Rust
+# (passivbot-rust) that must be compiled with maturin/pip at build time.
 # RUSTUP_HOME and CARGO_HOME are set to /opt paths (not /root) so the
 # runtime non-root user (pbgui) can execute rustup, cargo, and rustc.
 # chmod -R a+rwx ensures the toolchain remains accessible after USER switch.
@@ -78,29 +82,31 @@ RUN groupadd -r -g "${PBGUI_GID}" pbgui \
 
 # ── Allow pbgui to install apt packages without a password ───────────────────
 # PBGui's Ansible playbooks use `become: yes` to install system packages
-# (e.g. python3.12-venv) during the PB7 update flow.
+# (e.g. python3.12-venv) during update flows.
 # Only the two specific commands actually needed are whitelisted.
 RUN echo "pbgui ALL=(ALL) NOPASSWD: /usr/bin/apt-get, /usr/bin/apt" \
     >> /etc/sudoers.d/pbgui \
     && chmod 440 /etc/sudoers.d/pbgui
 
+# ── Clone source repositories (Strictly official GitHub remotes) ──────────────
+# - pbgui : FastAPI-based web UI for managing Passivbot instances.
+# - pb7   : Passivbot v7 trading bot engine.
+# - pb8   : Passivbot v8 trading bot engine.
+RUN git clone https://github.com/msei99/pbgui.git /app/pbgui \
+    && git -C /app/pbgui checkout "${PBGUI_COMMIT}" \
+    && git clone https://github.com/enarjord/passivbot.git /app/pb7 \
+    && git -C /app/pb7 checkout "${PB7_COMMIT}" \
+    && git clone https://github.com/enarjord/passivbot.git /app/pb8 \
+    && git -C /app/pb8 checkout "${PB8_COMMIT}" \
+    && chown -R pbgui:pbgui /app
+
 USER pbgui
 
-# ── Clone source repositories ─────────────────────────────────────────────────
-# - pbgui : Streamlit-based web UI for managing Passivbot instances.
-# - pb7   : Passivbot v7 trading bot engine (Rust-accelerated).
-# --depth 1 keeps the clone shallow, reducing build time and image transfer size.
-RUN git clone --depth 1 https://github.com/msei99/pbgui.git \
-    && git clone --depth 1 https://github.com/enarjord/passivbot.git pb7
-
 # ── Global PBGui dependencies (for Ansible subprocesses) ─────────────────────
-# Installed system-wide (outside any venv) so that Ansible-launched subprocesses
-# can import PBGui modules without requiring manual venv activation.
-# --ignore-installed avoids version conflicts with Ansible's own packages.
-# --break-system-packages is required on Ubuntu 23.04+ (PEP 668) when
-# installing into the system Python as a non-root user.
+# Installed in user site-packages (/app/.local) so Ansible-launched
+# subprocesses can import PBGui modules without requiring manual venv activation.
 RUN python3.12 -m pip install \
-    --ignore-installed \
+    --user \
     --no-cache-dir \
     --break-system-packages \
     --no-warn-script-location \
@@ -109,18 +115,13 @@ RUN python3.12 -m pip install \
 # ── Virtual environments ──────────────────────────────────────────────────────
 # Each component gets its own venv to keep dependency trees fully independent:
 # - venv_pb7   : Python 3.12 environment for Passivbot v7.
+# - venv_pb8   : Python 3.12 environment for Passivbot v8.
 # - venv_pbgui : Python 3.12 environment for the PBGui web application.
 RUN python3.12 -m venv venv_pb7 \
+    && python3.12 -m venv venv_pb8 \
     && python3.12 -m venv venv_pbgui
 
 # ── Passivbot v7: pip deps + compile Rust extension ──────────────────────────
-# Steps:
-#  1. Install all Python dependencies declared in pb7/requirements.txt.
-#  2. Compile the Rust extension (passivbot-rust) in release mode via maturin
-#     for maximum runtime performance.
-#  3. Symlink venv_pb7 to pb7/.venv so that maturin and other tooling can
-#     auto-discover the virtual environment without explicit activation.
-#  4. Leverage Docker cache mounts for cargo registries and compilation targets.
 RUN --mount=type=cache,target=/opt/cargo/registry,mode=0777 \
     --mount=type=cache,target=/app/pb7/passivbot-rust/target,mode=0777 \
     . venv_pb7/bin/activate \
@@ -131,6 +132,15 @@ RUN --mount=type=cache,target=/opt/cargo/registry,mode=0777 \
     && maturin develop --release \
     && ln -s /app/venv_pb7 /app/pb7/.venv
 
+# ── Passivbot v8: pip deps + compile Rust extension ──────────────────────────
+RUN --mount=type=cache,target=/opt/cargo/registry,mode=0777 \
+    --mount=type=cache,target=/app/pb8/passivbot-rust/target,mode=0777 \
+    . venv_pb8/bin/activate \
+    && cd pb8 \
+    && pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -e .[full] \
+    && ln -s /app/venv_pb8 /app/pb8/.venv
+
 # ── PBGui: pip deps ───────────────────────────────────────────────────────────
 # Installs the web application's dependencies inside its dedicated venv.
 RUN . venv_pbgui/bin/activate \
@@ -140,13 +150,11 @@ RUN . venv_pbgui/bin/activate \
 
 # ── PBGui configuration file (pbgui.ini) ─────────────────────────────────────
 # pbgui.ini is persisted via userdata/pbgui_data/ → /app/pbgui/data/ (already
-# a directory mount).  The entrypoint copies pbgui.ini from data/ into the
+# a directory mount). The entrypoint copies pbgui.ini from data/ into the
 # working directory at every startup, and writes it back on clean exit.
 # A default copy is placed in the working directory as pbgui.ini.default here so the
-# first boot can seed the persistent volume if it is empty.
-# The actual working copy at /app/pbgui/pbgui.ini is written by the entrypoint
-# and is never mounted directly, so configparser's atomic rename always works.
-RUN printf '[main]\npb7dir = /app/pb7\npb7venv = /app/venv_pb7/bin/python\npbname = mypassivbot\n[pbremote]\nbucket = pbgui:\n' \
+# first boot can seed the persistent volume with dual-engine paths (pb7 + pb8).
+RUN printf '[main]\npb7dir = /app/pb7\npb7venv = /app/venv_pb7/bin/python\npb8dir = /app/pb8\npb8venv = /app/venv_pb8/bin/python\npbname = mypassivbot\nrole = master\n[pbremote]\nbucket = pbgui:\n' \
        > /app/pbgui/pbgui.ini.default
 
 
@@ -164,8 +172,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_DEFAULT_TIMEOUT=120 \
     RUSTUP_HOME=/opt/rustup \
     CARGO_HOME=/opt/cargo \
-    PATH="/opt/cargo/bin:${PATH}" \
-    PYTHONPATH="/app/pb7"
+    PATH="/app/.local/bin:/opt/cargo/bin:${PATH}" \
+    PYTHONPATH="/app/pb7:/app/pb8"
 
 ARG PBGUI_UID=1000
 ARG PBGUI_GID=1000
@@ -180,11 +188,10 @@ WORKDIR /app
 # • sudo              : Ansible become for apt-get inside the container.
 # • rclone            : pbremote sync feature.
 # • curl              : healthcheck + rustup self-update path.
-# • libgomp1          : OpenMP runtime required by numba (pb7 dep).
+# • libgomp1          : OpenMP runtime required by numba.
 # • python-is-python3 : makes bare `python` resolve to python3.
 # • gcc + libc6-dev   : linker and development headers needed at runtime
 #                       by maturin/cargo to compile Rust extensions.
-# build-essential and software-properties-common are intentionally absent.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
@@ -200,29 +207,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libc6-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Allow global pip installs on Python 3.12
-# Ubuntu 23.04+ marks system Python as "externally managed" (PEP 668), which
-# prevents direct pip usage outside a virtual environment. Removing this marker
-# lets PBGui's dependencies be installed globally so that Ansible subprocesses
-# spawned by PBGui can import them without activating any venv.
-# ──────────────────────────────────────────────────────────────────────────────
+# Allow global pip installs on Python 3.12 (PEP 668 bypass for Ansible subprocs)
 RUN rm -f /usr/lib/python3.12/EXTERNALLY-MANAGED
 
 # ── Copy Rust toolchain from builder ─────────────────────────────────────────
-# Needed at runtime because the Ansible update playbook runs:
-#   rustup toolchain install/update  →  maturin develop --release
-# Copying the pre-built toolchain avoids re-downloading it on every update.
-# --chown ensures permissions are set correctly for the non-root user.
 COPY --from=builder --chown=pbgui:pbgui /opt/rustup /opt/rustup
 COPY --from=builder --chown=pbgui:pbgui /opt/cargo  /opt/cargo
 
 # ── Recreate runtime user with the same UID/GID ──────────────────────────────
-# The user must be recreated in the runtime stage because /etc/passwd and
-# /etc/group are not shared between stages. Using the same UID/GID values
-# guarantees that file ownership is preserved for all artifacts copied from
-# the builder stage, and that bind-mounted volumes on the host are accessible
-# without permission errors.
 RUN groupadd -r -g "${PBGUI_GID}" pbgui \
     && useradd -r -u "${PBGUI_UID}" -g pbgui -d /app -s /bin/bash pbgui \
     && chown pbgui:pbgui /app \
@@ -231,32 +223,21 @@ RUN groupadd -r -g "${PBGUI_GID}" pbgui \
     && chmod 440 /etc/sudoers.d/pbgui
 
 # ── Copy application artifacts from builder ───────────────────────────────────
-# Only the files strictly needed at runtime are transferred; build-time
-# tooling (build-essential, deadsnakes PPA, apt lists) stays in the builder
-# stage and never inflates the final image size.
-# --chown ensures ownership is set atomically during the copy, with no need
-# for a subsequent RUN chown pass.
 COPY --from=builder --chown=pbgui:pbgui /app/pbgui      /app/pbgui
 COPY --from=builder --chown=pbgui:pbgui /app/pb7        /app/pb7
+COPY --from=builder --chown=pbgui:pbgui /app/pb8        /app/pb8
 COPY --from=builder --chown=pbgui:pbgui /app/venv_pb7   /app/venv_pb7
+COPY --from=builder --chown=pbgui:pbgui /app/venv_pb8   /app/venv_pb8
 COPY --from=builder --chown=pbgui:pbgui /app/venv_pbgui /app/venv_pbgui
-
-# ── Copy global pip packages installed system-wide for Ansible subprocesses ──
-# These live under the pbgui home (.local) because pip used --break-system-packages
-# with a non-root user; the entire .local tree is transferred.
-COPY --from=builder --chown=pbgui:pbgui /app/.local /app/.local
+COPY --from=builder --chown=pbgui:pbgui /app/.local      /app/.local
 
 USER pbgui
 
 # ── Exposed ports ─────────────────────────────────────────────────────────────
-# 8000 : FastAPI REST interface & HTML/JS Web UI
+# 8000 : FastAPI REST interface & Web UI
 EXPOSE 8000
 
 # ── Container entrypoint ──────────────────────────────────────────────────────
-# entrypoint.sh syncs pbgui.ini between the persistent data/ volume and the
-# working directory before starting Streamlit, so configparser's atomic rename
-# (write .tmp → rename to final) always operates on a regular file rather than
-# a mount point — avoiding [Errno 16] Device or resource busy on every save.
 COPY --chown=pbgui:pbgui entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 

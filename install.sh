@@ -591,19 +591,23 @@ fi
 nextstep "Files & Configuration"
 
 # Subdirectory layout:
-#   pbgui_data/                    — PBGui runtime state (bots, UI preferences)
+#   pbgui_data/                    — PBGui runtime state (bots, UI preferences, SQLite db)
+#   pbgui_data/auth/               — FastAPI authentication credentials (secrets.toml)
 #   historical_data/               — OHLCV market data, shared across tools
-#   pbgui_ini/                     — pbgui.ini (mounted as dir to allow atomic saves)
-#   streamlit/                     — secrets.toml (mounted as dir to allow atomic saves)
 #   rclone/                        — rclone.conf cloud bucket credentials
 #   pb7/configs/                   — Passivbot v7 live trading configs
-#   pb7/backtests/                 — Backtest result archives
-#   pb7/optimize_results/          — Raw optimisation outputs
-#   pb7/optimize_results_analysis/ — Post-processed optimisation reports
-#   pb7/caches/                    — Cached market data for faster reruns
+#   pb7/backtests/                 — Passivbot v7 backtest result archives
+#   pb7/optimize_results/          — Passivbot v7 optimisation outputs
+#   pb7/optimize_results_analysis/ — Passivbot v7 optimisation reports
+#   pb7/caches/                    — Passivbot v7 market data cache
+#   pb8/configs/                   — Passivbot v8 live trading configs
+#   pb8/backtests/                 — Passivbot v8 backtest result archives
+#   pb8/optimize_results/          — Passivbot v8 optimisation outputs
+#   pb8/caches/                    — Passivbot v8 market data cache
 
 SUBDIRS=(
     pbgui_data
+    pbgui_data/auth
     historical_data
     rclone
     pb7/configs
@@ -611,6 +615,10 @@ SUBDIRS=(
     pb7/optimize_results
     pb7/optimize_results_analysis
     pb7/caches
+    pb8/configs
+    pb8/backtests
+    pb8/optimize_results
+    pb8/caches
 )
 
 echo -e "  ${BOLD}Userdata directories${RESET}"
@@ -626,9 +634,10 @@ for dir in "${SUBDIRS[@]}"; do
 done
 echo ""
 
-# Apply 755 to directories only; sensitive files receive 600 individually below.
+# Apply 755 to directories; restrict auth directory to 700.
 find "$USERDATA_PATH" -type d -exec chmod 755 {} +
-success "Permissions applied  ${DIM}755 (directories)${RESET}"
+chmod 700 "${USERDATA_PATH}/pbgui_data/auth" 2>/dev/null || true
+success "Permissions applied  ${DIM}755 (directories) / 700 (auth)${RESET}"
 
 # ── .env ──────────────────────────────────────────────────────────────────────
 
@@ -649,19 +658,96 @@ fi
 # Write UID/GID to .env so docker compose can pass them as build args to the
 # Dockerfile and use them in the 'user:' field to run the container process
 # as the same account that owns the files on the host.
+# Write UID/GID to .env so docker compose can pass them as build args to the
+# Dockerfile and use them in the 'user:' field to run the container process
+# as the same account that owns the files on the host.
 env_set PBGUI_UID "$DOCKER_UID"
 env_set PBGUI_GID "$DOCKER_GID"
 success "UID/GID written to .env  ${DIM}(${DOCKER_UID}:${DOCKER_GID})${RESET}"
 
+# ── Component Git Version Selection ───────────────────────────────────────────
+# Downloads are strictly enforced from official GitHub repositories:
+#   PBGui:     https://github.com/msei99/pbgui.git
+#   Passivbot: https://github.com/enarjord/passivbot.git
+
+VERSIONS_FILE="${REPO_DIR}/versions.env"
+DEFAULT_PBGUI_COMMIT="37942d20e4670e2c97c5477ec0af413a6e94a294"
+DEFAULT_PB7_COMMIT="fc6b9e016e04a3723bb5fe8847f1500049fa982c"
+DEFAULT_PB8_COMMIT="a0897f83932db5e6888c1c96f8f1c668d452013f"
+
+if [ -f "$VERSIONS_FILE" ]; then
+    _v_pbgui=$(grep -E '^PBGUI_COMMIT=' "$VERSIONS_FILE" | cut -d= -f2- | tr -d '[:space:]')
+    _v_pb7=$(grep -E '^PB7_COMMIT=' "$VERSIONS_FILE" | cut -d= -f2- | tr -d '[:space:]')
+    _v_pb8=$(grep -E '^PB8_COMMIT=' "$VERSIONS_FILE" | cut -d= -f2- | tr -d '[:space:]')
+    DEFAULT_PBGUI_COMMIT="${_v_pbgui:-$DEFAULT_PBGUI_COMMIT}"
+    DEFAULT_PB7_COMMIT="${_v_pb7:-$DEFAULT_PB7_COMMIT}"
+    DEFAULT_PB8_COMMIT="${_v_pb8:-$DEFAULT_PB8_COMMIT}"
+fi
+
+SEL_PBGUI_COMMIT="$DEFAULT_PBGUI_COMMIT"
+SEL_PB7_COMMIT="$DEFAULT_PB7_COMMIT"
+SEL_PB8_COMMIT="$DEFAULT_PB8_COMMIT"
+
+echo ""
+mini_divider
+echo ""
+echo -e "  ${BOLD}Component Version Selection${RESET}"
+echo -e "  ${DIM}Downloads are strictly restricted to official GitHub repositories.${RESET}"
+echo ""
+
+if ! $NON_INTERACTIVE; then
+    echo -e "  Choose component release versions to install:"
+    echo ""
+    echo -e "    ${DIM}1)${RESET}  Latest online releases        ${DIM}(PBGui: main · PB7: master · PB8: master)${RESET}"
+    echo -e "    ${DIM}2)${RESET}  Verified tested versions      ${DIM}(PBGui: ${DEFAULT_PBGUI_COMMIT} · PB7: ${DEFAULT_PB7_COMMIT:0:8} · PB8: ${DEFAULT_PB8_COMMIT})${RESET} ${CYAN}[recommended]${RESET}"
+    echo -e "    ${DIM}3)${RESET}  Custom commits or branches"
+    echo ""
+    echo -en "  ${CYAN}?${RESET} Your choice ${DIM}[2]${RESET}: "
+    read -r _vchoice
+    _vchoice="${_vchoice:-2}"
+
+    case "$_vchoice" in
+        1)
+            SEL_PBGUI_COMMIT="main"
+            SEL_PB7_COMMIT="master"
+            SEL_PB8_COMMIT="master"
+            info "Selected latest online releases."
+            ;;
+        2)
+            SEL_PBGUI_COMMIT="$DEFAULT_PBGUI_COMMIT"
+            SEL_PB7_COMMIT="$DEFAULT_PB7_COMMIT"
+            SEL_PB8_COMMIT="$DEFAULT_PB8_COMMIT"
+            info "Selected verified tested versions."
+            ;;
+        3)
+            echo ""
+            info "Specify valid git commit SHAs, tags, or branch names."
+            prompt_input SEL_PBGUI_COMMIT "PBGui commit/branch" "$DEFAULT_PBGUI_COMMIT"
+            prompt_input SEL_PB7_COMMIT   "Passivbot v7 commit/branch" "$DEFAULT_PB7_COMMIT"
+            prompt_input SEL_PB8_COMMIT   "Passivbot v8 commit/branch" "$DEFAULT_PB8_COMMIT"
+
+            for _ref in "$SEL_PBGUI_COMMIT" "$SEL_PB7_COMMIT" "$SEL_PB8_COMMIT"; do
+                if [[ ! "$_ref" =~ ^[a-zA-Z0-9_.-]+$ ]]; then
+                    error "Invalid git reference name: '$_ref'. Only alphanumeric characters, '.', '_', '-' allowed."
+                fi
+            done
+            ;;
+        *)
+            info "Defaulting to verified tested versions."
+            ;;
+    esac
+fi
+
+env_set PBGUI_COMMIT "$SEL_PBGUI_COMMIT"
+env_set PB7_COMMIT "$SEL_PB7_COMMIT"
+env_set PB8_COMMIT "$SEL_PB8_COMMIT"
+success "Versions written to .env  ${DIM}(PBGui: ${SEL_PBGUI_COMMIT} · PB7: ${SEL_PB7_COMMIT:0:8} · PB8: ${SEL_PB8_COMMIT})${RESET}"
+
 # ── pbgui.ini ─────────────────────────────────────────────────────────────────
 # PBGui writes all UI-saved settings to pbgui.ini at runtime (CoinMarketCap
 # API key, PBRemote bucket, PBData config, VPS Monitor settings, exchange
-# configuration, …).  The file is persisted inside the data/ volume
-# (userdata/pbgui_data/pbgui.ini → /app/pbgui/data/pbgui.ini) which is already
-# a directory bind-mount.  entrypoint.sh copies it to the working path
-# /app/pbgui/pbgui.ini at container startup and writes it back on shutdown, so
-# configparser's atomic rename (write .tmp → rename to final) always operates
-# on a regular file and never hits [Errno 16] Device or resource busy.
+# configuration, …). The file is persisted inside the data/ volume
+# (userdata/pbgui_data/pbgui.ini → /app/pbgui/data/pbgui.ini).
 
 PBGUI_INI_FILE="${USERDATA_PATH}/pbgui_data/pbgui.ini"
 
@@ -678,12 +764,15 @@ else
 [main]
 pb7dir = /app/pb7
 pb7venv = /app/venv_pb7/bin/python
+pb8dir = /app/pb8
+pb8venv = /app/venv_pb8/bin/python
 pbname = mypassivbot
+role = master
 [pbremote]
 bucket = pbgui:
 EOF
     chmod 600 "$PBGUI_INI_FILE"
-    success "pbgui.ini created  ${DIM}(minimal defaults — configure from the Web UI)${RESET}"
+    success "pbgui.ini created  ${DIM}(configured for dual engine PB7 + PB8)${RESET}"
 fi
 
 # ── Services ──────────────────────────────────────────────────────────────────
@@ -697,11 +786,11 @@ SERVICES_CONF_FILE="${USERDATA_PATH}/pbgui_data/services.conf"
 # Canonical list of optional background services.
 # Format: "ScriptName.py|Short description|default(y/n)"
 _SERVICES=(
-    "PBRun.py|Bot runner — executes live trading instances|y"
-    "PBRemote.py|Remote sync — rclone cloud backup of configs|y"
-    "PBMon.py|Monitor — Telegram/webhook alerts|y"
+    "PBRun.py|Bot runner — executes live trading instances (PB7 & PB8)|y"
     "PBData.py|Data manager — downloads and caches OHLCV data|y"
     "PBCoinData.py|CoinMarketCap data — market cap and coin info|y"
+    "PBCluster.py|Cluster sync — node synchronization and credential manager|y"
+    "monitor_agent.py|VPS Monitor agent — local system metrics and process monitor|y"
 )
 
 echo ""
@@ -750,7 +839,6 @@ else
         echo ""
         for _entry in "${_SERVICES[@]}"; do
             IFS='|' read -r _script _desc _default <<< "$_entry"
-            # Derive a clean variable name: PBRun.py → ENABLE_PBRUN
             _key="ENABLE_$(echo "${_script%.py}" | tr '[:lower:]' '[:upper:]')"
             echo "# ${_desc}"
             echo "${_key}=${_svc_enabled[$_script]}"
@@ -763,8 +851,8 @@ fi
 unset _SERVICES _svc_enabled _entry _script _desc _default _key
 
 # ── secrets.toml ──────────────────────────────────────────────────────────────
-# Mounted as a directory (userdata/streamlit/ → /app/pbgui/.streamlit/) for the
-# same reason as pbgui.ini: Streamlit saves secrets via atomic rename, which
+# Persisted inside userdata/pbgui_data/auth/secrets.toml -> /app/pbgui/data/auth/secrets.toml
+# Secrets are loaded by FastAPI authentication endpoints at runtime.
 # requires the parent directory to be a writable bind mount, not the file itself.
 
 SECRETS_FILE="${USERDATA_PATH}/pbgui_data/auth/secrets.toml"

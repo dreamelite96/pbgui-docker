@@ -21,6 +21,9 @@ services:
       args:
         PBGUI_UID: ${PBGUI_UID:-1000}
         PBGUI_GID: ${PBGUI_GID:-1000}
+        PBGUI_COMMIT: ${PBGUI_COMMIT:-37942d20e4670e2c97c5477ec0af413a6e94a294}
+        PB7_COMMIT: ${PB7_COMMIT:-fc6b9e016e04a3723bb5fe8847f1500049fa982c}
+        PB8_COMMIT: ${PB8_COMMIT:-a0897f83932db5e6888c1c96f8f1c668d452013f}
 
     # Local image tag — useful for inspecting history and rolling back to a
     # previously built image without rebuilding from scratch.
@@ -53,10 +56,10 @@ services:
           memory: ${PBGUI_MEMORY_LIMIT:-8192M}
 
     # ── Ports ───────────────────────────────────────────────────────────────
-    # The new FastAPI-based Web UI runs on port 8000. Port 8501 (Streamlit) is obsolete.
+    # The new FastAPI-based Web UI runs on port 8000.
     ports:
       - "${PBGUI_WEBUI_PORT:-8000}:8000"
-    
+
     # ── Healthcheck ─────────────────────────────────────────────────────────
     # Targets the FastAPI health endpoint on port 8000.
     healthcheck:
@@ -83,11 +86,8 @@ services:
     # ── Volumes ─────────────────────────────────────────────────────────────
     volumes:
       # ── PBGui ── #
-      # Persists bot list, session state, UI settings, logs, job queues,
+      # Persists bot list, session state, UI settings, credentials (data/auth/),
       # SQLite database (PBData), PID files, coindata cache, and pbgui.ini.
-      # pbgui.ini is stored here (data/pbgui.ini) and synced to the working
-      # directory by entrypoint.sh at startup / on shutdown, so configparser's
-      # atomic rename never hits a Docker mount point.
       - ./userdata/pbgui_data:/app/pbgui/data
 
       # (Development only) Uncomment the line below to mount your local pbgui-main source
@@ -97,7 +97,6 @@ services:
       # rclone/: directory mount for rclone cloud bucket credentials.
       # The user pbgui's HOME is /app, so rclone reads/writes
       # /app/.config/rclone/rclone.conf at runtime.
-      # Mounted as a directory to allow atomic writes by rclone.
       - ./userdata/rclone:/app/.config/rclone
 
       # ── Shared data ── #
@@ -106,15 +105,24 @@ services:
       # downloads if additional components are added to the stack in the future.
       - ./userdata/historical_data:/app/pb7/historical_data
       - ./userdata/api-keys.json:/app/pb7/api-keys.json
+      - ./userdata/api-keys.json:/app/pb8/api-keys.json
 
       # ── Passivbot v7 ── #
-      # All persistent artefacts produced by PB7: live trading configs, backtest
-      # result archives, optimisation outputs, and downloaded market-data caches.
+      # Persistent artefacts for PB7: live trading configs, backtest result archives,
+      # optimisation outputs, and cached market data.
       - ./userdata/pb7/configs:/app/pb7/configs
       - ./userdata/pb7/backtests:/app/pb7/backtests
       - ./userdata/pb7/optimize_results:/app/pb7/optimize_results
       - ./userdata/pb7/optimize_results_analysis:/app/pb7/optimize_results_analysis
       - ./userdata/pb7/caches:/app/pb7/caches
+
+      # ── Passivbot v8 ── #
+      # Persistent artefacts for PB8: live trading configs, backtest result archives,
+      # optimisation outputs, and cached market data.
+      - ./userdata/pb8/configs:/app/pb8/configs
+      - ./userdata/pb8/backtests:/app/pb8/backtests
+      - ./userdata/pb8/optimize_results:/app/pb8/optimize_results
+      - ./userdata/pb8/caches:/app/pb8/caches
 
     # ── Network ─────────────────────────────────────────────────────────────
     networks:

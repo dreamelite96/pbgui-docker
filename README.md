@@ -26,23 +26,25 @@
 
 ## Overview
 
-**PBGui-Docker** provides a ready-to-use Docker setup to deploy [PBGui](https://github.com/msei99/pbgui) by msei99 — a FastAPI-based web GUI for managing [Passivbot v7](https://github.com/enarjord/passivbot) trading bot instances — inside an isolated Docker container.
+**PBGui-Docker** provides a ready-to-use Docker setup to deploy [PBGui](https://github.com/msei99/pbgui) by msei99 — a FastAPI-based web GUI for managing [Passivbot](https://github.com/enarjord/passivbot) **v7** and **v8** trading bot engines — inside an isolated, dual-engine Docker container.
 
 The image is built on **Ubuntu 24.04 LTS** and bundles the full dependency stack at build time:
 
-- **Python 3.12** (via the deadsnakes PPA)
-- **Rust toolchain** (required to compile `passivbot-rust`, the performance-critical Rust extension of Passivbot v7)
+- **Python 3.12**
+- **Rust toolchain** (required to compile `passivbot-rust`, the performance-critical Rust extension of Passivbot v7 and v8)
 - **Ansible** (used internally by PBGui for remote bot management)
-- Two isolated Python virtual environments: one for PBGui (`venv_pbgui`) and one for Passivbot v7 (`venv_pb7`)
+- Three isolated Python virtual environments: PBGui (`venv_pbgui`), Passivbot v7 (`venv_pb7`), and Passivbot v8 (`venv_pb8`)
 
 
 ## Features
 
 - ⚡ **One-command setup** — no manual Python, Rust, or Ansible installation required
+- 🤖 **Dual Engine support** — run both Passivbot v7 and Passivbot v8 seamlessly side-by-side
+- 🎯 **Version Selection** — choose between latest online GitHub releases, verified tested releases, or custom commit SHAs
 - 🐳 **Cross-platform** — works on Linux, macOS, and Windows via Docker
 - 💾 **Persistent volumes** — all data, configs, backtests, and API keys survive container restarts
 - 🔄 **Re-runnable setup script** — can be safely run multiple times; never overwrites existing credentials
-- 🔒 **Security-hardened** — runs with dropped Linux capabilities and `no-new-privileges`; the container process runs as a non-root user whose UID/GID matches the host user that owns the bind-mounted volumes
+- 🔒 **Security-hardened** — runs with dropped Linux capabilities and `no-new-privileges`; container process runs as non-root with host-matched UID/GID
 - 🩺 **Healthcheck built-in** — Docker automatically monitors the FastAPI interface
 - 🖥️ **TrueNAS SCALE compatible** — `install.sh` detects TrueNAS environments and adapts accordingly
 
@@ -51,7 +53,7 @@ The image is built on **Ubuntu 24.04 LTS** and bundles the full dependency stack
 
 - [Docker](https://docs.docker.com/get-docker/) v25+
 - [Docker Compose](https://docs.docker.com/compose/install/) v2.20+
-- A valid exchange API key (Bybit, Bitget, OKX, Binance and many others) for Passivbot v7
+- A valid exchange API key (Bybit, Bitget, OKX, Binance, Hyperliquid and others) for Passivbot
 
 
 ## Project Structure
@@ -60,13 +62,17 @@ The image is built on **Ubuntu 24.04 LTS** and bundles the full dependency stack
 pbgui-docker/
 ├── Dockerfile              # Container image definition (Ubuntu 24.04 LTS + Python 3.12 + Rust)
 ├── docker-compose.yml      # Service orchestration with volumes, ports, and security config
-├── install.sh              # Installation script
+├── entrypoint.sh           # Container entrypoint and service manager
+├── install.sh              # Interactive setup and installer script
+├── versions.env            # Verified stable default git commit hashes
+├── .env.example            # Environment variable template
 ├── README.md               # This file
 └── userdata/               # Created by the installer — all persistent data lives here
-    ├── api-keys.json       # Exchange API credentials
+    ├── api-keys.json       # Exchange API credentials (shared between PB7 & PB8)
     ├── pbgui_data/         # PBGui runtime state, bot list, UI settings, and auth/secrets.toml
     ├── historical_data/    # Downloaded OHLCV market data
-    └── pb7/                # Passivbot v7 configs, backtests, and optimisation results
+    ├── pb7/                # Passivbot v7 configs, backtests, and optimisation results
+    └── pb8/                # Passivbot v8 configs, backtests, and optimisation results
 ```
 
 ***

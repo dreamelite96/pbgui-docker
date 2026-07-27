@@ -13,20 +13,7 @@
 # ──────────────────────────────────────────────────────────────────────────────
 
 # entrypoint.sh — Sync pbgui.ini between the persistent data/ volume and the
-# PBGui working directory, then start PBApiServer.
-#
-# Root cause: pbgui.ini is always read and written at its absolute path
-# /app/pbgui/pbgui.ini (via PBGDIR from pbgui_purefunc.py).  When saving,
-# PBGui (configparser) writes a .tmp file then renames it to pbgui.ini —
-# an atomic operation that fails with [Errno 16] Device or resource busy
-# if pbgui.ini itself is a Docker bind-mount (file-level mount = mount point
-# the container cannot unlink or rename over).
-#
-# Solution: pbgui.ini is persisted inside the already-mounted data/ volume
-# (userdata/pbgui_data/ → /app/pbgui/data/).  This script copies it to the
-# working location at startup so PBGui always operates on a regular file,
-# and writes it back on clean shutdown so the next container boot picks up
-# any changes saved during the session.
+# PBGui working directory, ensure FastAPI auth structure, and start PBApiServer.
 
 set -euo pipefail
 
@@ -45,20 +32,45 @@ if [ -f "$PERSISTENT_INI" ]; then
     cp "$PERSISTENT_INI" "$WORKING_INI"
 fi
 
+# ── Startup: Ensure auth directory and api-keys.json exist ────────────────────
+mkdir -p /app/pbgui/data/auth
+chmod 700 /app/pbgui/data/auth 2>/dev/null || true
+
+# Ensure api-keys.json is initialized if missing to prevent directory auto-creation
+if [ ! -f /app/pb7/api-keys.json ]; then
+    mkdir -p /app/pb7
+    echo '{"default_user":{"exchange":"binance","key":"","secret":""}}' > /app/pb7/api-keys.json
+fi
+
+# ── Startup: Ensure dual-engine PB7 and PB8 entries exist in pbgui.ini ──────
+if [ -f "$WORKING_INI" ]; then
+    /app/venv_pbgui/bin/python -c "
+import sys
+path = '$WORKING_INI'
+try:
+    with open(path, 'r') as f:
+        content = f.read()
+    if '[main]' in content and 'pb8dir' not in content:
+        print('Updating pbgui.ini with Passivbot v8 engine configuration...')
+        content = content.replace('[main]', '[main]\npb8venv = /app/venv_pb8/bin/python\npb8dir = /app/pb8')
+        with open(path, 'w') as f:
+            f.write(content)
+except Exception as e:
+    print(f'Warning: Failed to update pbgui.ini: {e}')
+"
+    cp "$WORKING_INI" "$PERSISTENT_INI" 2>/dev/null || true
+fi
+
 # ── Startup: clear stale PID files from previous container runs ──────────────
 echo "Clearing stale PID files..."
 rm -f /app/pbgui/data/pid/*.pid 2>/dev/null || true
 
 # ── Background watcher: sync pbgui.ini → data/ whenever it changes ───────────
-# docker stop sends SIGTERM directly to the PID 1 process (PBApiServer after
-# exec), bypassing any bash trap — so copy-on-shutdown is unreliable.
-# Instead, a background loop polls the working file every 5 seconds and
-# copies it to the persistent location as soon as its mtime changes.
-# This guarantees the last saved state is persisted regardless of how the
-# container stops (SIGTERM, SIGKILL, OOM, crash).
 _watch_ini() {
-    local last_mtime=0 cur_mtime
+    local last_mtime cur_mtime
+    last_mtime=$(stat -c '%Y' "$WORKING_INI" 2>/dev/null || echo 0)
     while true; do
+        sleep 5
         if [ -f "$WORKING_INI" ]; then
             cur_mtime=$(stat -c '%Y' "$WORKING_INI" 2>/dev/null || echo 0)
             if [ "$cur_mtime" != "$last_mtime" ]; then
@@ -66,15 +78,12 @@ _watch_ini() {
                 last_mtime="$cur_mtime"
             fi
         fi
-        sleep 5
     done
 }
 _watch_ini &
 WATCHER_PID=$!
 
 # ── Shutdown trap: final sync + kill watcher ─────────────────────────────────
-# This trap fires when the entrypoint shell exits (after PBApiServer returns),
-# not on SIGTERM to PBApiServer itself — but it covers clean exit paths.
 _cleanup() {
     if [ -f "$WORKING_INI" ]; then
         cp "$WORKING_INI" "$PERSISTENT_INI"
@@ -89,7 +98,6 @@ cd /app/pbgui
 SERVICES_CONF="/app/pbgui/data/services.conf"
 
 # Helper: read a KEY=VALUE from services.conf; returns "true" if absent
-# (fail-open: missing file or missing key → service starts).
 _svc_enabled() {
     local key="$1"
     if [ ! -f "$SERVICES_CONF" ]; then
@@ -98,7 +106,6 @@ _svc_enabled() {
     fi
 
     local val
-
     val=$(grep -E "^${key}=" "$SERVICES_CONF" 2>/dev/null \
           | tail -1 \
           | sed 's/^[^=]*=//' \
@@ -118,6 +125,5 @@ _svc_enabled() {
 [ "$(_svc_enabled ENABLE_PBCLUSTER)"      = "true" ] && /app/venv_pbgui/bin/python PBCluster.py &
 [ "$(_svc_enabled ENABLE_MONITOR_AGENT)"  = "true" ] && /app/venv_pbgui/bin/python monitor_agent.py &
 
-# Start the new FastAPI-based API/Web UI server as the foreground process
+# Start the FastAPI-based API/Web UI server as the foreground process
 exec /app/venv_pbgui/bin/python PBApiServer.py
-
